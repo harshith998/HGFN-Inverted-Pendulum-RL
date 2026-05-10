@@ -34,13 +34,13 @@ class ReplayBuffer:
         max_e = max_edges
 
         # pre-allocate all arrays up front for speed
-        self.node_feat      = np.zeros((capacity, max_n, 8),  dtype=np.float32)
+        self.node_feat      = np.zeros((capacity, max_n, 9),  dtype=np.float32)
         self.edge_index     = np.zeros((capacity, 2, max_e),  dtype=np.int64)
         self.edge_feat      = np.zeros((capacity, max_e, 2),  dtype=np.float32)
         self.n_nodes        = np.zeros((capacity, 1),          dtype=np.int64)
         self.n_edges        = np.zeros((capacity, 1),          dtype=np.int64)
 
-        self.next_node_feat = np.zeros((capacity, max_n, 8),  dtype=np.float32)
+        self.next_node_feat = np.zeros((capacity, max_n, 9),  dtype=np.float32)
         self.next_edge_index= np.zeros((capacity, 2, max_e),  dtype=np.int64)
         self.next_edge_feat = np.zeros((capacity, max_e, 2),  dtype=np.float32)
         self.next_n_nodes   = np.zeros((capacity, 1),          dtype=np.int64)
