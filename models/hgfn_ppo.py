@@ -309,34 +309,20 @@ class ICGALayer(nn.Module):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# HGFN Encoder: node_embed → RIM → ICGA layers
+# HGFN Encoder: node_embed → ICGA layers
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class HGFNEncoder(nn.Module):
     """
-    node_embed  →  RIM (with tanh-encoded edge features)  →  ICGA layers
+    node_embed  →  ICGA layers  →  masked mean pool
 
-    Edge features are encoded separately for RIM vs ICGA:
-      • RIM uses a tanh-bounded encoder (hidden//4 dims).  Raw norm features go
-        OOD for unseen link lengths (norm_len > 1), causing ReLU activation
-        collapse in RIM messages.  Tanh saturates gracefully instead.
-      • ICGA uses raw features directly in its linear edge_bias — identical to
-        GNNTransformerPPO, which already generalises well OOD with this pattern.
+    Identical to GNNTransformerEncoder except each attention layer receives
+    the analytic inertia coupling M̃ as an additional bias on the logits.
     """
 
     def __init__(self, hidden: int, n_icga_layers: int, n_heads: int):
         super().__init__()
         self.node_embed  = nn.Linear(NODE_FEAT_DIM, hidden)
-
-        # Tanh-bounded edge encoder for RIM.
-        # Output is bounded regardless of raw input magnitude → OOD-safe.
-        edge_enc_dim = max(hidden // 4, 4)
-        self.rim_edge_enc = nn.Sequential(
-            nn.Linear(EDGE_FEAT_DIM, edge_enc_dim),
-            nn.Tanh(),
-        )
-        self.rim         = RIMLayer(hidden, edge_enc_dim)
-
         self.icga_layers = nn.ModuleList(
             [ICGALayer(hidden, n_heads) for _ in range(n_icga_layers)]
         )
@@ -353,11 +339,6 @@ class HGFNEncoder(nn.Module):
 
         h = self.node_embed(node_features)              # (B, max_nodes, hidden)
 
-        # RIM: tanh-encoded edge features (OOD-safe)
-        edge_enc = self.rim_edge_enc(edge_features)     # (B, max_edges, edge_enc_dim)
-        h = self.rim(h, edge_enc, edge_index, n_edges)
-
-        # ICGA: raw edge features for linear bias (same as GNNTransformerPPO)
         for layer in self.icga_layers:
             h = layer(h, edge_features, edge_index, n_edges, M_tilde)
 
