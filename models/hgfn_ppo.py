@@ -3,17 +3,9 @@
 """
 Hamiltonian Graph Flow Network (HGFN) — actor-critic for PPO.
 
-Three novel components (all operating on the same observations as GNNTransformerPPO):
+Two novel components (all operating on the same observations as GNNTransformerPPO):
 
-  1. Recursive Inertia Module (RIM)
-     ─────────────────────────────
-     Bidirectional message-passing that mirrors the Articulated Body Algorithm:
-       • Backward pass (leaf → root): aggregates inertia information up the chain.
-       • Forward  pass (root → leaf): propagates control context back down.
-     Standard MPNNs send identical messages in both directions; RIM enforces
-     the physical directionality of force/inertia propagation.
-
-  2. Inertia-Coupled Graph Attention (ICGA)
+  1. Inertia-Coupled Graph Attention (ICGA)
      ───────────────────────────────────────
      The normalised inertia coupling M̃ᵢⱼ(q; L, m) is added as an analytic
      physics bias to each attention logit:
@@ -30,7 +22,7 @@ Three novel components (all operating on the same observations as GNNTransformer
      The mass matrix is computed analytically from the existing node/edge
      features — no new information enters the observation.
 
-  3. Potential Energy Residual Critic  (PERC)
+  2. Potential Energy Residual Critic  (PERC)
      ──────────────────────────────────────────
      The value function is decomposed as:
 
@@ -38,20 +30,17 @@ Three novel components (all operating on the same observations as GNNTransformer
 
      where V̂_pot = g Σᵢ mᵢ hᵢ(q) / H_scale is the analytically-computed
      potential energy (height of each link's CoM), and w_H is a learned scalar
-     initialised to 0.  Using V_pot rather than T+V avoids dependence on the
-     unobservable cart mass and removes the kinetic ambiguity (high T can mean
-     active balancing OR falling fast).  V_pot is always positive, always exact,
-     and monotonically correlated with upright-ness — an ideal physics prior.
+     initialised to 0.  V_pot is always positive, always exact, and
+     monotonically correlated with upright-ness — an ideal physics prior for
+     the value function.
 
 Math reference (2-link, generalises to n-link):
   Mᵢⱼ(q) = Σₖ≥max(i,j) mₖ · Jᵢₖ(q) · Jⱼₖ(q) + δᵢⱼ Iᵢ
-  T       = ½ q̇ᵀ M(q) q̇
   V_pot   = g Σₖ mₖ hₖ(q)   (height of each centre-of-mass above cart)
 """
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from models.base_ppo import BasePPOPolicy
 
 NODE_FEAT_DIM = 9
