@@ -234,7 +234,7 @@ def train(cfg, plot: bool = True):
     all_ep_rewards, all_ep_lengths, all_ep_wins = [], [], []
 
     log_steps, log_mean_reward, log_mean_length, log_survival = [], [], [], []
-    log_beta, log_wH, log_H_mean = [], [], []   # HGFN-specific diagnostics
+    log_beta = []   # HGFN-specific diagnostics
 
     global_step = 0
     t_start     = time.time()
@@ -250,15 +250,12 @@ def train(cfg, plot: bool = True):
         # ── Rollout collection ────────────────────────────────────────────────
         policy.eval()
         buffer.reset()
-        rollout_H = []   # track Hamiltonian values during rollout
 
         for _ in range(rollout_steps):
             obs_t = obs_to_tensor(batch_obs(obs_list), device)
 
             with torch.no_grad():
                 actions_t, log_probs_t, _, values_t = policy.get_action_and_value(obs_t)
-                H_vals = compute_hamiltonian(obs_t).cpu().numpy()
-                rollout_H.extend(H_vals.tolist())
 
             actions_np   = actions_t.squeeze(-1).cpu().numpy()
             log_probs_np = log_probs_t.cpu().numpy()
@@ -321,14 +318,11 @@ def train(cfg, plot: bool = True):
         elapsed      = time.time() - t_start
 
         # HGFN diagnostics
-        beta_val  = float(policy.encoder.icga_layers[0].physics_beta.item())
-        wH_val    = float(policy.w_H.item())
-        H_mean    = float(np.mean(rollout_H)) if rollout_H else 0.0
+        beta_val = float(policy.encoder.icga_layers[0].physics_beta.item())
 
-        log_steps.append(global_step);         log_mean_reward.append(mean_r)
-        log_mean_length.append(mean_len);      log_survival.append(survival_pct)
-        log_beta.append(beta_val);             log_wH.append(wH_val)
-        log_H_mean.append(H_mean)
+        log_steps.append(global_step);    log_mean_reward.append(mean_r)
+        log_mean_length.append(mean_len); log_survival.append(survival_pct)
+        log_beta.append(beta_val)
 
         if mean_r > best_mean_reward and len(all_ep_rewards) >= 20:
             best_mean_reward = mean_r
@@ -339,7 +333,7 @@ def train(cfg, plot: bool = True):
         print(f"step {global_step:>8} | eps {ep_count:>5} "
               f"| reward {mean_r:>7.2f} | ep_len {mean_len:>6.1f} "
               f"| surv {survival_pct:>5.1f}% "
-              f"| β {beta_val:+.3f} | w_H {wH_val:+.3f} | H̄ {H_mean:.2f} "
+              f"| β {beta_val:+.3f} "
               f"| lr {cur_lr:.2e} | {elapsed:.0f}s")
 
     for env in envs:
@@ -348,36 +342,31 @@ def train(cfg, plot: bool = True):
 
     if plot:
         _plot_training(log_steps, log_mean_reward, log_mean_length,
-                       log_survival, log_beta, log_wH, log_H_mean)
+                       log_survival, log_beta)
 
     return log_steps, log_mean_reward, log_mean_length, log_survival
 
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
-def _plot_training(steps, rewards, lengths, survival, betas, wHs, H_means):
-    fig, axes = plt.subplots(5, 1, figsize=(11, 13), sharex=True)
+def _plot_training(steps, rewards, lengths, survival, betas):
+    fig, axes = plt.subplots(4, 1, figsize=(11, 11), sharex=True)
     fig.suptitle("HGFN PPO Training")
 
-    axes[0].plot(steps, rewards,   color="steelblue")
-    axes[0].set_ylabel("Mean Reward (last 20 eps)");  axes[0].grid(alpha=0.3)
+    axes[0].plot(steps, rewards,  color="steelblue")
+    axes[0].set_ylabel("Mean Reward (last 20 eps)"); axes[0].grid(alpha=0.3)
 
-    axes[1].plot(steps, lengths,   color="seagreen")
-    axes[1].set_ylabel("Mean Episode Length");        axes[1].grid(alpha=0.3)
+    axes[1].plot(steps, lengths,  color="seagreen")
+    axes[1].set_ylabel("Mean Episode Length");       axes[1].grid(alpha=0.3)
 
-    axes[2].plot(steps, survival,  color="tomato")
-    axes[2].set_ylabel("Survival Rate %");            axes[2].grid(alpha=0.3)
+    axes[2].plot(steps, survival, color="tomato")
+    axes[2].set_ylabel("Survival Rate %");           axes[2].grid(alpha=0.3)
     axes[2].set_ylim(0, 105)
 
-    axes[3].plot(steps, betas,     color="darkorange", label="β (physics attn)")
-    axes[3].plot(steps, wHs,       color="purple",     label="w_H (Hamiltonian)")
-    axes[3].set_ylabel("Physics Weights");             axes[3].grid(alpha=0.3)
-    axes[3].legend(fontsize=8)
+    axes[3].plot(steps, betas,    color="darkorange")
+    axes[3].set_ylabel("β (physics attn scale)");   axes[3].grid(alpha=0.3)
     axes[3].axhline(0, color="black", linewidth=0.5, linestyle="--")
-
-    axes[4].plot(steps, H_means,   color="teal")
-    axes[4].set_ylabel("Mean Ĥ (normalised energy)"); axes[4].grid(alpha=0.3)
-    axes[4].set_xlabel("Training Steps")
+    axes[3].set_xlabel("Training Steps")
 
     plt.tight_layout()
     os.makedirs("checkpoints", exist_ok=True)
