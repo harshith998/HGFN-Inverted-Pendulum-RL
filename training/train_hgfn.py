@@ -7,8 +7,7 @@ Training script for the Hamiltonian Graph Flow Network (HGFN).
 Drop-in replacement for train_ppo.py — identical PPO loop, same environment,
 same hyperparameter file.  Key differences:
   • Uses HGFNPPOPolicy instead of GNNTransformerPPOPolicy.
-  • Logs additional diagnostics: β (physics attention scale), w_H (Hamiltonian
-    critic weight), and the mean normalised Hamiltonian value of rollout states.
+  • Logs β (physics attention scale) each update.
   • Default config overrides for HGFN (n_heads=2, n_icga_layers=2).
 """
 
@@ -25,7 +24,7 @@ import yaml
 import matplotlib.pyplot as plt
 
 from env.pendulum_env import VariablePendulumEnv
-from models.hgfn_ppo import HGFNPPOPolicy, compute_hamiltonian
+from models.hgfn_ppo import HGFNPPOPolicy
 
 
 # ── Observation helpers (identical to train_ppo.py) ─────────────────────────

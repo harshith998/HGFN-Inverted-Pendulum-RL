@@ -3,40 +3,29 @@
 """
 Hamiltonian Graph Flow Network (HGFN) — actor-critic for PPO.
 
-Two novel components (all operating on the same observations as GNNTransformerPPO):
+Novel component (operating on the same observations as GNNTransformerPPO):
 
-  1. Inertia-Coupled Graph Attention (ICGA)
-     ───────────────────────────────────────
-     The normalised inertia coupling M̃ᵢⱼ(q; L, m) is added as an analytic
-     physics bias to each attention logit:
+  Inertia-Coupled Graph Attention (ICGA)
+  ───────────────────────────────────────
+  The normalised inertia coupling M̃ᵢⱼ(q; L, m) is added as an analytic
+  physics bias to each attention logit:
 
-         logit_ij = Q·K/√d  +  β · M̃ᵢⱼ  +  w_e · e_ij
+      logit_ij = Q·K/√d  +  β · M̃ᵢⱼ  +  w_e · e_ij
 
-     M̃ᵢⱼ = Mᵢⱼ / √(Mᵢᵢ · Mⱼⱼ)  ∈ [-1, 1]
+  M̃ᵢⱼ = Mᵢⱼ / √(Mᵢᵢ · Mⱼⱼ)  ∈ [-1, 1]
 
-     is the normalised entry of the Lagrangian mass matrix. It encodes how
-     strongly joints i and j are kinematically coupled — high when they share
-     heavy distal mass, near zero when mechanically decoupled. β is a learned
-     scalar initialised to 0 (degrades to standard transformer at β=0).
+  is the normalised entry of the Lagrangian mass matrix. It encodes how
+  strongly joints i and j are kinematically coupled — high when they share
+  heavy distal mass, near zero when mechanically decoupled. β is a learned
+  scalar initialised to 0 (degrades to standard transformer at β=0).
 
-     The mass matrix is computed analytically from the existing node/edge
-     features — no new information enters the observation.
+  The mass matrix is computed analytically from the existing node/edge
+  features — no new information enters the observation.
 
-  2. Potential Energy Residual Critic  (PERC)
-     ──────────────────────────────────────────
-     The value function is decomposed as:
-
-         V(s) = w_H · V̂_pot(q; L, m)  +  f_θ(z_GNN)
-
-     where V̂_pot = g Σᵢ mᵢ hᵢ(q) / H_scale is the analytically-computed
-     potential energy (height of each link's CoM), and w_H is a learned scalar
-     initialised to 0.  V_pot is always positive, always exact, and
-     monotonically correlated with upright-ness — an ideal physics prior for
-     the value function.
+# TODO: add w_H (PERC — potential energy residual critic) and RIM (bidirectional inertia message passing) later
 
 Math reference (2-link, generalises to n-link):
   Mᵢⱼ(q) = Σₖ≥max(i,j) mₖ · Jᵢₖ(q) · Jⱼₖ(q) + δᵢⱼ Iᵢ
-  V_pot   = g Σₖ mₖ hₖ(q)   (height of each centre-of-mass above cart)
 """
 
 import torch
@@ -50,10 +39,7 @@ EDGE_FEAT_DIM = 2
 _LEN_MIN         = 0.3;  _LEN_RANGE       = 0.9   # L = norm * 0.9 + 0.3
 _MASS_MIN        = 0.1;  _MASS_RANGE      = 1.9   # m = norm * 1.9 + 0.1
 _CART_MASS_MIN   = 0.5;  _CART_MASS_RANGE = 2.5   # m_c = norm * 2.5 + 0.5
-_CART_VEL        = 5.0                             # ẋ normalisation
 _ANG_VEL         = 10.0                            # θ̇  normalisation
-_G               = 9.81                            # gravitational acceleration
-_H_SCALE         = 20.0                            # rough energy normalisation constant
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -156,40 +142,6 @@ def compute_inertia_coupling(obs: dict) -> torch.Tensor:
     diag_sqrt = M.diagonal(dim1=-2, dim2=-1).clamp(min=1e-6).sqrt()  # (B, max_nodes)
     denom     = (diag_sqrt.unsqueeze(-1) * diag_sqrt.unsqueeze(-2)).clamp(min=1e-6)
     return M / denom                                                   # (B, max_nodes, max_nodes)
-
-
-def compute_hamiltonian(obs: dict) -> torch.Tensor:
-    """
-    Analytically compute normalised potential energy V_pot / H_scale.
-
-    WHY only V_pot, not T + V:
-      Kinetic energy T requires cart mass, which is unobservable.  Using a
-      fixed estimate would introduce systematic errors of up to ±50%
-      during training (cart mass ~ Uniform[0.5, 3.0]).  Worse, high T often
-      means the pendulum is moving fast — which is correlated with *bad* states
-      (recovering from, or in the process of, falling) just as much as good
-      ones.  In practice this causes w_H to learn a negative value, actively
-      fighting the critic.
-
-      V_pot = g Σᵢ mᵢ hᵢ(q) is always exact (no cart mass needed) and is
-      monotonically correlated with upright-ness: maximum when all cos(θ) = 1
-      (perfectly vertical), decreasing as links tilt.  This is a clean,
-      noise-free physics prior for the value function.
-
-    Returns
-    -------
-    V_norm : (B,) float32, positive; maximum (upright) ≈ 1.0
-    """
-    L, m, _, cos_th, _, rod_valid = _rod_tensors(obs)
-    rv = rod_valid.float()
-
-    # h_com[i] = Σⱼ<ᵢ Lⱼ cos(θⱼ)  +  (Lᵢ/2) cos(θᵢ)  (height of CoM above cart)
-    L_cos     = L * cos_th
-    cum_L_cos = torch.cumsum(L_cos, dim=1) - L_cos     # exclusive prefix sum
-    h_com     = cum_L_cos + L * cos_th / 2
-    V         = _G * (m * h_com * rv).sum(dim=1)       # (B,)
-
-    return V / _H_SCALE                                 # (B,)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -355,14 +307,11 @@ class HGFNEncoder(nn.Module):
 
 class HGFNPPOPolicy(BasePPOPolicy):
     """
-    Full HGFN actor-critic.
+    HGFN actor-critic — transformer + analytic inertia-coupling attention bias.
 
-    Inherits the actor/critic trunk and action-sampling logic from BasePPOPolicy.
-    Overrides get_value and get_action_and_value to inject the Hamiltonian
-    residual into the value estimate:
-
-        V(s) = value_head( critic_trunk( z_GNN ) )  +  w_H · Ĥ(s)
-                ↑ learned from rollout rewards              ↑ analytic physics
+    Identical to GNNTransformerPPOPolicy except each attention layer adds
+    β · M̃ᵢⱼ to the logits, where M̃ is the normalised Lagrangian mass matrix
+    computed analytically from the observation every forward pass.
     """
 
     def __init__(self, hidden: int = 128, n_icga_layers: int = 2,
@@ -370,64 +319,7 @@ class HGFNPPOPolicy(BasePPOPolicy):
                  max_force: float = 20.0):
         super().__init__(hidden=hidden, max_force=max_force)
         self.encoder = HGFNEncoder(hidden, n_icga_layers, n_heads)
-        # w_H: Hamiltonian mixing weight — init=0, learns from data
-        self.w_H = nn.Parameter(torch.zeros(1))
 
-    # BasePPOPolicy.encode is required; we satisfy the abstract interface here
     def encode(self, obs: dict) -> torch.Tensor:
         M_tilde = compute_inertia_coupling(obs)
         return self.encoder(obs, M_tilde)
-
-    # ── Override to inject Hamiltonian residual ──────────────────────────────
-
-    def get_value(self, obs: dict) -> torch.Tensor:
-        M_tilde = compute_inertia_coupling(obs)
-        z       = self.encoder(obs, M_tilde)
-        H_norm  = compute_hamiltonian(obs)                 # (B,)
-        v_gnn   = self.value_head(self.critic_trunk(z))   # (B, 1)
-        return v_gnn + self.w_H * H_norm.unsqueeze(-1)    # (B, 1)
-
-    def get_action_and_value(self, obs: dict, action=None):
-        """
-        Identical to BasePPOPolicy.get_action_and_value except:
-          • Physics ops are computed once and shared between actor + critic.
-          • Value = GNN value + w_H · Ĥ(s).
-        """
-        import numpy as np
-
-        M_tilde  = compute_inertia_coupling(obs)
-        z        = self.encoder(obs, M_tilde)
-        H_norm   = compute_hamiltonian(obs)                # (B,)
-
-        actor_h  = self.actor_trunk(z)
-        critic_h = self.critic_trunk(z)
-
-        raw_mean = self.mean_head(actor_h)                 # (B, 1)
-
-        from models.base_ppo import LOG_STD_MIN, LOG_STD_MAX
-        log_std  = self.log_std.clamp(LOG_STD_MIN, LOG_STD_MAX)
-        std      = log_std.exp().expand_as(raw_mean)
-
-        dist     = torch.distributions.Normal(raw_mean, std)
-
-        if action is None:
-            raw_action = dist.rsample()
-        else:
-            a_norm     = (action / self.max_force).clamp(-1 + 1e-6, 1 - 1e-6)
-            raw_action = torch.atanh(a_norm)
-
-        squashed = torch.tanh(raw_action) * self.max_force
-
-        log_prob = dist.log_prob(raw_action)
-        log_prob = log_prob - torch.log(
-            self.max_force * (1.0 - torch.tanh(raw_action).pow(2)) + 1e-6
-        )
-        log_prob = log_prob.squeeze(-1)
-
-        entropy  = dist.entropy().squeeze(-1)
-
-        # Hamiltonian residual critic
-        v_gnn    = self.value_head(critic_h)               # (B, 1)
-        value    = v_gnn + self.w_H * H_norm.unsqueeze(-1)
-
-        return squashed, log_prob, entropy, value
