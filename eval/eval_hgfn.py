@@ -387,10 +387,8 @@ def main():
 
     # Print learned physics weights from checkpoint
     beta_val = float(policy.encoder.icga_layers[0].physics_beta.item())
-    wH_val   = float(policy.w_H.item())
     print(f"\nLearned physics weights (from checkpoint):")
     print(f"  β  (inertia attention scale) = {beta_val:+.4f}")
-    print(f"  w_H (Hamiltonian critic weight) = {wH_val:+.4f}")
 
     # Inference timing benchmark
     _timing_env = make_fixed_env(cfg, link_length=0.75, link_mass=1.05)
