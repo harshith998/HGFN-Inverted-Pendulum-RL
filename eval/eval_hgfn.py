@@ -1,7 +1,9 @@
 # Run: python3.12 eval/eval_hgfn.py
-#      python3.12 eval/eval_hgfn.py --checkpoint checkpoints/hgfn_ppo_best.pt
+#      python3.12 eval/eval_hgfn.py --variant perhead
+#      python3.12 eval/eval_hgfn.py --checkpoint checkpoints/hgfn_base_ppo_best.pt
 #      python3.12 eval/eval_hgfn.py --tests 1 2        # skip heatmap
 #      python3.12 eval/eval_hgfn.py --tests 3           # heatmap only (uses cache)
+#      python3.12 eval/eval_hgfn.py --compare           # run all variants side-by-side
 
 """
 OOD evaluation suite for the Hamiltonian Graph Flow Network (HGFN).
@@ -14,6 +16,11 @@ Tests
   1. 1D sweep — link_length   (100 pts × 10 eps each)
   2. 1D sweep — link_mass     (100 pts × 10 eps each)
   3. 2D heatmap — link_length × link_mass  (20×20 grid, reuses Tests 1+2 cache)
+
+Variants
+--------
+  base, perhead, directional, gravity, perc
+  --compare runs all found checkpoints and overlays them on shared plots.
 """
 
 import sys
@@ -29,7 +36,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
 from env.pendulum_env import VariablePendulumEnv
-from models.hgfn_ppo import HGFNPPOPolicy
+from models.hgfn import load_hgfn_variant, VARIANTS
 
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
@@ -42,14 +49,24 @@ MIN_PARAM_VAL   = 0.05
 COLOR_IN_DIST = "#5ba4cf"
 COLOR_OOD     = "#1a3a5c"
 
-POLICY_LABEL  = "HGFN"
-CACHE_KEY     = "hgfn"
-DEFAULT_CKPT  = "checkpoints/hgfn_ppo_best.pt"
+# Per-variant plot colours for --compare mode
+VARIANT_COLORS = {
+    "base":        "#e06c00",
+    "perhead":     "#8e44ad",
+    "directional": "#27ae60",
+    "gravity":     "#c0392b",
+    "perc":        "#2980b9",
+}
+
+
+def _default_ckpt(variant: str) -> str:
+    return f"checkpoints/hgfn_{variant}_ppo_best.pt"
 
 
 # ── Model loading ─────────────────────────────────────────────────────────────
 
-def load_policy(checkpoint_path: str, cfg: dict, device: torch.device):
+def load_policy(checkpoint_path: str, cfg: dict, device: torch.device,
+                variant: str = "base"):
     env_cfg   = cfg["environment"]
     ppo_cfg   = cfg["ppo"]
     h_cfg     = ppo_cfg.get("hgfn", {})
@@ -60,8 +77,8 @@ def load_policy(checkpoint_path: str, cfg: dict, device: torch.device):
     n_heads   = h_cfg.get("n_heads",       2)
     max_force = env_cfg["max_force"]
 
-    policy = HGFNPPOPolicy(
-        hidden=hidden, n_icga_layers=n_icga,
+    policy = load_hgfn_variant(
+        variant, hidden=hidden, n_icga_layers=n_icga,
         n_heads=n_heads, max_links=max_links, max_force=max_force,
     )
 
@@ -75,6 +92,22 @@ def load_policy(checkpoint_path: str, cfg: dict, device: torch.device):
     policy.to(device)
     policy.eval()
     return policy
+
+
+def _beta_summary(policy, variant: str) -> str:
+    """Single-line physics-weight summary for the eval header."""
+    layer = policy.encoder.icga_layers[0]
+    if variant == "directional":
+        import torch
+        b_fwd = float(torch.tanh(layer.physics_beta_fwd).item())
+        b_bwd = float(torch.tanh(layer.physics_beta_bwd).item())
+        return f"β_fwd={b_fwd:+.4f}  β_bwd={b_bwd:+.4f}"
+    import torch
+    beta = layer.physics_beta
+    if beta.numel() > 1:
+        vals = torch.tanh(beta).tolist()
+        return "β_heads=[" + ", ".join(f"{v:+.3f}" for v in vals) + "]"
+    return f"β={float(beta.item()):+.4f}"
 
 
 # ── Environment factory ───────────────────────────────────────────────────────
@@ -277,7 +310,7 @@ def run_test3(policy, cfg, device, cache, n_episodes, n_grid):
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
 def plot_1d(values, rewards, train_lo, train_hi,
-            param_name, units, plot_dir):
+            param_name, units, plot_dir, variant: str = "base"):
     fig, ax = plt.subplots(figsize=(11, 5))
 
     colors = [COLOR_IN_DIST if train_lo <= v <= train_hi else COLOR_OOD
@@ -305,19 +338,19 @@ def plot_1d(values, rewards, train_lo, train_hi,
     ax.set_xlabel(f"{param_name} ({units})", fontsize=12)
     ax.set_ylabel(f"Mean Reward ({N_EVAL_EPISODES} eps)", fontsize=12)
     ax.set_title(
-        f"OOD Generalisation — {param_name} | {POLICY_LABEL} PPO", fontsize=13)
+        f"OOD Generalisation — {param_name} | HGFN-{variant} PPO", fontsize=13)
     ax.grid(alpha=0.25)
 
     plt.tight_layout()
     slug = param_name.lower().replace(" ", "_")
-    path = os.path.join(plot_dir, f"{CACHE_KEY}_ppo_{slug}_sweep.png")
+    path = os.path.join(plot_dir, f"hgfn_{variant}_ppo_{slug}_sweep.png")
     plt.savefig(path, dpi=150)
     print(f"  Plot saved → {path}")
     plt.close()
 
 
 def plot_2d(length_vals, mass_vals, reward_grid,
-            len_bounds, mass_bounds, plot_dir):
+            len_bounds, mass_bounds, plot_dir, variant: str = "base"):
     fig, ax = plt.subplots(figsize=(9, 7))
 
     im = ax.pcolormesh(length_vals, mass_vals, reward_grid,
@@ -338,57 +371,168 @@ def plot_2d(length_vals, mass_vals, reward_grid,
     ax.set_xlabel("Link Length (m)", fontsize=12)
     ax.set_ylabel("Link Mass (kg)", fontsize=12)
     ax.set_title(
-        f"OOD Heatmap — Length × Mass | {POLICY_LABEL} PPO\n"
+        f"OOD Heatmap — Length × Mass | HGFN-{variant} PPO\n"
         f"(white dashed box = training distribution)",
         fontsize=12,
     )
     ax.legend(fontsize=9, loc="upper right")
 
     plt.tight_layout()
-    path = os.path.join(plot_dir, f"{CACHE_KEY}_ppo_ood_heatmap.png")
+    path = os.path.join(plot_dir, f"hgfn_{variant}_ppo_ood_heatmap.png")
     plt.savefig(path, dpi=150)
     print(f"  Plot saved → {path}")
     plt.close()
+
+
+# ── Compare mode — overlay all variants on one plot ───────────────────────────
+
+def run_compare(cfg, device, args):
+    """Load every variant whose checkpoint exists and overlay on shared 1D plots."""
+    import matplotlib.pyplot as plt
+
+    env_cfg   = cfg["environment"]
+    len_lo,  len_hi  = env_cfg["link_length_range"]
+    mass_lo, mass_hi = env_cfg["link_mass_range"]
+    mass_mid = (mass_lo + mass_hi) / 2.0
+    len_mid  = (len_lo  + len_hi)  / 2.0
+
+    len_eval_lo,  len_eval_hi  = compute_eval_range(len_lo,  len_hi)
+    mass_eval_lo, mass_eval_hi = compute_eval_range(mass_lo, mass_hi)
+    length_vals = np.linspace(len_eval_lo,  len_eval_hi,  args.n_sweep_points)
+    mass_vals   = np.linspace(mass_eval_lo, mass_eval_hi, args.n_sweep_points)
+
+    os.makedirs("eval/plots", exist_ok=True)
+    os.makedirs("eval/cache", exist_ok=True)
+
+    fig_len, ax_len = plt.subplots(figsize=(12, 5))
+    fig_mass, ax_mass = plt.subplots(figsize=(12, 5))
+
+    for ax, param_name in [(ax_len, "Link Length"), (ax_mass, "Link Mass")]:
+        train_lo = len_lo if "Length" in param_name else mass_lo
+        train_hi = len_hi if "Length" in param_name else mass_hi
+        units    = "m"    if "Length" in param_name else "kg"
+        ax.axvspan(train_lo, train_hi, alpha=0.08, color=COLOR_IN_DIST,
+                   label="Training dist.")
+        ax.axvline(train_lo, color=COLOR_IN_DIST, linewidth=1.2, linestyle="--", alpha=0.6)
+        ax.axvline(train_hi, color=COLOR_IN_DIST, linewidth=1.2, linestyle="--", alpha=0.6)
+        ax.set_xlabel(f"{param_name} ({units})", fontsize=12)
+        ax.set_ylabel(f"Mean Reward ({args.n_eval_episodes} eps)", fontsize=12)
+        ax.set_ylim(0, 2000)
+        ax.grid(alpha=0.25)
+
+    found_any = False
+    for variant in VARIANTS:
+        ckpt = _default_ckpt(variant)
+        if not os.path.exists(ckpt):
+            print(f"  [skip] {variant} — checkpoint not found ({ckpt})")
+            continue
+
+        print(f"\n--- variant: {variant} ---")
+        policy = load_policy(ckpt, cfg, device, variant=variant)
+        color  = VARIANT_COLORS.get(variant, "#555555")
+
+        cache_path = f"eval/cache/hgfn_{variant}_ppo_ood_cache.npz"
+        cache      = load_cache(cache_path)
+
+        # Length sweep
+        l_rewards = []
+        for length in length_vals:
+            k = _key(length, mass_mid)
+            if k not in cache:
+                env = make_fixed_env(cfg, link_length=length, link_mass=mass_mid)
+                cache[k] = eval_point(policy, env, args.n_eval_episodes, device)
+                env.close()
+            l_rewards.append(cache[k])
+        save_cache(cache_path, cache)
+        ax_len.plot(length_vals, l_rewards, color=color, linewidth=1.5,
+                    label=f"HGFN-{variant}")
+
+        # Mass sweep
+        m_rewards = []
+        for mass in mass_vals:
+            k = _key(len_mid, mass)
+            if k not in cache:
+                env = make_fixed_env(cfg, link_length=len_mid, link_mass=mass)
+                cache[k] = eval_point(policy, env, args.n_eval_episodes, device)
+                env.close()
+            m_rewards.append(cache[k])
+        save_cache(cache_path, cache)
+        ax_mass.plot(mass_vals, m_rewards, color=color, linewidth=1.5,
+                     label=f"HGFN-{variant}")
+
+        found_any = True
+
+    if not found_any:
+        print("No variant checkpoints found. Train at least one variant first.")
+        return
+
+    for ax, fig, fname, title in [
+        (ax_len,  fig_len,  "eval/plots/hgfn_compare_length_sweep.png",
+         "HGFN Variant Comparison — Link Length"),
+        (ax_mass, fig_mass, "eval/plots/hgfn_compare_mass_sweep.png",
+         "HGFN Variant Comparison — Link Mass"),
+    ]:
+        ax.set_title(title, fontsize=13)
+        ax.legend(fontsize=9)
+        fig.tight_layout()
+        fig.savefig(fname, dpi=150)
+        print(f"  Compare plot saved → {fname}")
+        plt.close(fig)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="OOD evaluation for HGFN PPO policy.")
+        description="OOD evaluation for HGFN PPO policy variants.")
     parser.add_argument("--config",     default="configs/default.yaml")
+    parser.add_argument("--variant",    default="base",
+        choices=list(VARIANTS),
+        help="HGFN variant to evaluate (default: base)")
     parser.add_argument("--checkpoint", default=None,
-        help=f"Path to .pt file. Defaults to {DEFAULT_CKPT}")
+        help="Path to .pt file. Defaults to checkpoints/hgfn_{variant}_ppo_best.pt")
     parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3],
         default=[1, 2, 3])
     parser.add_argument("--n_eval_episodes", type=int, default=N_EVAL_EPISODES)
     parser.add_argument("--n_sweep_points",  type=int, default=N_SWEEP_POINTS)
     parser.add_argument("--n_grid",          type=int, default=N_GRID_1D)
+    parser.add_argument("--compare", action="store_true",
+        help="Run all available variants and generate comparison plots")
     args = parser.parse_args()
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    checkpoint = args.checkpoint or DEFAULT_CKPT
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # ── Compare mode ──────────────────────────────────────────────────────────
+    if args.compare:
+        print(f"\nDevice : {device}")
+        print(f"Mode   : --compare (all variants)")
+        run_compare(cfg, device, args)
+        print("Done.")
+        return
+
+    # ── Single variant mode ───────────────────────────────────────────────────
+    variant    = args.variant
+    checkpoint = args.checkpoint or _default_ckpt(variant)
+
     if not os.path.exists(checkpoint):
         raise FileNotFoundError(
             f"Checkpoint not found: {checkpoint}\n"
-            f"Train first:  python3.12 training/train_hgfn.py")
+            f"Train first:  python3.12 training/train_hgfn.py --variant {variant}")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\nDevice     : {device}")
-    print(f"Policy     : {POLICY_LABEL}")
+    print(f"Policy     : HGFN-{variant}")
     print(f"Checkpoint : {checkpoint}")
     print(f"Config     : {args.config}")
     print(f"Tests      : {args.tests}")
     print(f"Episodes/pt: {args.n_eval_episodes}")
 
-    policy = load_policy(checkpoint, cfg, device)
+    policy = load_policy(checkpoint, cfg, device, variant=variant)
 
-    # Print learned physics weights from checkpoint
-    beta_val = float(policy.encoder.icga_layers[0].physics_beta.item())
     print(f"\nLearned physics weights (from checkpoint):")
-    print(f"  β  (inertia attention scale) = {beta_val:+.4f}")
+    print(f"  {_beta_summary(policy, variant)}")
 
     # Inference timing benchmark
     _timing_env = make_fixed_env(cfg, link_length=0.75, link_mass=1.05)
@@ -408,7 +552,7 @@ def main():
 
     os.makedirs("eval/plots", exist_ok=True)
     os.makedirs("eval/cache", exist_ok=True)
-    cache_path = f"eval/cache/{CACHE_KEY}_ppo_ood_cache.npz"
+    cache_path = f"eval/cache/hgfn_{variant}_ppo_ood_cache.npz"
     cache      = load_cache(cache_path)
     print(f"Cache      : {len(cache)} existing entries  ({cache_path})")
 
@@ -419,7 +563,7 @@ def main():
                 args.n_eval_episodes, args.n_sweep_points)
             save_cache(cache_path, cache)
             plot_1d(l_vals, l_rewards, l_lo, l_hi,
-                    "Link Length", "m", "eval/plots")
+                    "Link Length", "m", "eval/plots", variant=variant)
 
         if 2 in args.tests:
             m_vals, m_rewards, m_lo, m_hi = run_test2(
@@ -427,14 +571,15 @@ def main():
                 args.n_eval_episodes, args.n_sweep_points)
             save_cache(cache_path, cache)
             plot_1d(m_vals, m_rewards, m_lo, m_hi,
-                    "Link Mass", "kg", "eval/plots")
+                    "Link Mass", "kg", "eval/plots", variant=variant)
 
         if 3 in args.tests:
             l_v, m_v, r_grid, l_bounds, m_bounds = run_test3(
                 policy, cfg, device, cache,
                 args.n_eval_episodes, args.n_grid)
             save_cache(cache_path, cache)
-            plot_2d(l_v, m_v, r_grid, l_bounds, m_bounds, "eval/plots")
+            plot_2d(l_v, m_v, r_grid, l_bounds, m_bounds,
+                    "eval/plots", variant=variant)
 
     finally:
         save_cache(cache_path, cache)

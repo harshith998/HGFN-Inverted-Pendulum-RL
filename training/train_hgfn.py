@@ -390,9 +390,9 @@ def train(cfg, variant: str = "base", plot: bool = True):
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
-def _plot_training(steps, rewards, lengths, survival, betas):
+def _plot_training(steps, rewards, lengths, survival, betas, variant: str = "base"):
     fig, axes = plt.subplots(4, 1, figsize=(11, 11), sharex=True)
-    fig.suptitle("HGFN PPO Training")
+    fig.suptitle(f"HGFN-{variant} PPO Training")
 
     axes[0].plot(steps, rewards,  color="steelblue")
     axes[0].set_ylabel("Mean Reward (last 20 eps)"); axes[0].grid(alpha=0.3)
@@ -411,7 +411,7 @@ def _plot_training(steps, rewards, lengths, survival, betas):
 
     plt.tight_layout()
     os.makedirs("checkpoints", exist_ok=True)
-    path = "checkpoints/hgfn_ppo_training_curve.png"
+    path = f"checkpoints/hgfn_{variant}_ppo_training_curve.png"
     plt.savefig(path, dpi=150)
     print(f"  plot saved → {path}")
     plt.show()
@@ -420,11 +420,15 @@ def _plot_training(steps, rewards, lengths, survival, betas):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/default.yaml")
+    parser = argparse.ArgumentParser(
+        description="Train an HGFN variant with PPO.")
+    parser.add_argument("--config",  default="configs/default.yaml")
+    parser.add_argument("--variant", default="base",
+        choices=list(VARIANTS),
+        help="HGFN variant to train (default: base)")
     args = parser.parse_args()
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    train(cfg)
+    train(cfg, variant=args.variant)
