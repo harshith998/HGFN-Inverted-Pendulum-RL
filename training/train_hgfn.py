@@ -1,14 +1,24 @@
 # Run: python3.12 training/train_hgfn.py
 #      python3.12 training/train_hgfn.py --config configs/default.yaml
+#      python3.12 training/train_hgfn.py --variant perhead
+#      python3.12 training/train_hgfn.py --variant gravity --config configs/default.yaml
 
 """
 Training script for the Hamiltonian Graph Flow Network (HGFN).
 
 Drop-in replacement for train_ppo.py — identical PPO loop, same environment,
 same hyperparameter file.  Key differences:
-  • Uses HGFNPPOPolicy instead of GNNTransformerPPOPolicy.
+  • Uses an HGFN variant (base|perhead|directional|gravity|perc).
   • Logs β (physics attention scale) each update.
   • Default config overrides for HGFN (n_heads=2, n_icga_layers=2).
+
+Variants
+--------
+  base        — scalar β·M̃ per layer  (default)
+  perhead     — per-head β·M̃
+  directional — β_fwd/β_bwd directional scales
+  gravity     — scalar β·M̃ + gravity torque node injection
+  perc        — scalar β·M̃ + PERC critic (w_H init=1)
 """
 
 import sys
@@ -24,7 +34,7 @@ import yaml
 import matplotlib.pyplot as plt
 
 from env.pendulum_env import VariablePendulumEnv
-from models.hgfn_ppo import HGFNPPOPolicy
+from models.hgfn import load_hgfn_variant, VARIANTS
 
 
 # ── Observation helpers (identical to train_ppo.py) ─────────────────────────
@@ -156,16 +166,46 @@ def compute_ppo_loss(policy, obs, actions, old_log_probs, returns, advantages,
     return total, policy_loss.item(), value_loss.item(), (-entropy_loss).item()
 
 
+# ── Beta extraction helper ────────────────────────────────────────────────────
+
+def _get_beta_val(policy, variant: str) -> float:
+    """Extract a representative β scalar for logging (variant-aware)."""
+    layer = policy.encoder.icga_layers[0]
+    if variant == "directional":
+        b_fwd = float(torch.tanh(layer.physics_beta_fwd).item())
+        b_bwd = float(torch.tanh(layer.physics_beta_bwd).item())
+        return (b_fwd + b_bwd) / 2.0
+    beta = layer.physics_beta
+    if beta.numel() > 1:
+        return float(torch.tanh(beta).mean().item())
+    return float(beta.item())
+
+
+def _beta_label(policy, variant: str) -> str:
+    """Human-readable beta string for the log line."""
+    layer = policy.encoder.icga_layers[0]
+    if variant == "directional":
+        b_fwd = float(torch.tanh(layer.physics_beta_fwd).item())
+        b_bwd = float(torch.tanh(layer.physics_beta_bwd).item())
+        return f"β_fwd {b_fwd:+.3f} β_bwd {b_bwd:+.3f}"
+    beta = layer.physics_beta
+    if beta.numel() > 1:
+        vals = torch.tanh(beta).tolist()
+        mean = sum(vals) / len(vals)
+        return f"β̄ {mean:+.3f}"
+    return f"β {float(beta.item()):+.3f}"
+
+
 # ── Main training loop ────────────────────────────────────────────────────────
 
-def train(cfg, plot: bool = True):
+def train(cfg, variant: str = "base", plot: bool = True):
     device  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env_cfg = cfg["environment"]
     ppo_cfg = cfg["ppo"]
     h_cfg   = ppo_cfg.get("hgfn", {})     # HGFN-specific overrides
     n_envs  = ppo_cfg.get("n_envs", 4)
 
-    print(f"Device: {device}  |  Policy: HGFN  |  Parallel envs: {n_envs}")
+    print(f"Device: {device}  |  Policy: HGFN-{variant}  |  Parallel envs: {n_envs}")
 
     def make_env():
         return VariablePendulumEnv(
@@ -195,13 +235,13 @@ def train(cfg, plot: bool = True):
     n_heads      = h_cfg.get("n_heads",       2)
     entropy_coef = h_cfg.get("entropy_coef",  ppo_cfg["entropy_coef"])
 
-    policy = HGFNPPOPolicy(
-        hidden=hidden, n_icga_layers=n_icga,
+    policy = load_hgfn_variant(
+        variant, hidden=hidden, n_icga_layers=n_icga,
         n_heads=n_heads, max_links=max_links, max_force=max_force,
     )
     policy.to(device)
 
-    print(f"  HGFN: hidden={hidden}, n_icga={n_icga}, n_heads={n_heads}, "
+    print(f"  HGFN-{variant}: hidden={hidden}, n_icga={n_icga}, n_heads={n_heads}, "
           f"entropy_coef={entropy_coef}")
     total_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     print(f"  Trainable parameters: {total_params:,}")
@@ -225,7 +265,7 @@ def train(cfg, plot: bool = True):
 
     os.makedirs("checkpoints", exist_ok=True)
     best_mean_reward = -np.inf
-    best_model_path  = "checkpoints/hgfn_ppo_best.pt"
+    best_model_path  = f"checkpoints/hgfn_{variant}_ppo_best.pt"
 
     obs_list   = [env.reset()[0] for env in envs]
     ep_rewards = [0.0] * n_envs
@@ -318,7 +358,8 @@ def train(cfg, plot: bool = True):
         elapsed      = time.time() - t_start
 
         # HGFN diagnostics
-        beta_val = float(policy.encoder.icga_layers[0].physics_beta.item())
+        beta_val   = _get_beta_val(policy, variant)
+        beta_label = _beta_label(policy, variant)
 
         log_steps.append(global_step);    log_mean_reward.append(mean_r)
         log_mean_length.append(mean_len); log_survival.append(survival_pct)
@@ -333,7 +374,7 @@ def train(cfg, plot: bool = True):
         print(f"step {global_step:>8} | eps {ep_count:>5} "
               f"| reward {mean_r:>7.2f} | ep_len {mean_len:>6.1f} "
               f"| surv {survival_pct:>5.1f}% "
-              f"| β {beta_val:+.3f} "
+              f"| {beta_label} "
               f"| lr {cur_lr:.2e} | {elapsed:.0f}s")
 
     for env in envs:
@@ -342,7 +383,7 @@ def train(cfg, plot: bool = True):
 
     if plot:
         _plot_training(log_steps, log_mean_reward, log_mean_length,
-                       log_survival, log_beta)
+                       log_survival, log_beta, variant)
 
     return log_steps, log_mean_reward, log_mean_length, log_survival
 
