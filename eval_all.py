@@ -1,0 +1,229 @@
+#!/usr/bin/env python3.12
+"""
+Run every OOD evaluation job sequentially.
+
+Usage
+-----
+  python3.12 eval_all.py
+  python3.12 eval_all.py --config configs/default.yaml
+  python3.12 eval_all.py --skip dqn_mlp hgfn_perc
+  python3.12 eval_all.py --only ppo_gnn_mpnn hgfn_base
+  python3.12 eval_all.py --tests 1 2
+
+Jobs (in order)
+---------------
+  ppo_mlp
+  ppo_gnn_mpnn
+  ppo_gnn_transformer
+  dqn_mlp
+  dqn_gnn
+  hgfn_base
+  hgfn_perhead
+  hgfn_directional
+  hgfn_gravity
+  hgfn_perc
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+import time
+
+
+JOBS = [
+    {"name": "ppo_mlp",             "cmd": ["python3.12", "-u", "eval/eval_ppo.py",  "--policy", "mlp"]},
+    {"name": "ppo_gnn_mpnn",        "cmd": ["python3.12", "-u", "eval/eval_ppo.py",  "--policy", "gnn_mpnn"]},
+    {"name": "ppo_gnn_transformer", "cmd": ["python3.12", "-u", "eval/eval_ppo.py",  "--policy", "gnn_transformer"]},
+    {"name": "dqn_mlp",             "cmd": ["python3.12", "-u", "eval/eval_dqn.py",  "--policy", "mlp"]},
+    {"name": "dqn_gnn",             "cmd": ["python3.12", "-u", "eval/eval_dqn.py",  "--policy", "gnn"]},
+    {"name": "hgfn_base",           "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "base"]},
+    {"name": "hgfn_perhead",        "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "perhead"]},
+    {"name": "hgfn_directional",    "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "directional"]},
+    {"name": "hgfn_gravity",        "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "gravity"]},
+    {"name": "hgfn_perc",           "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "perc"]},
+]
+
+
+def _print_header(msg: str):
+    width = 70
+    print(f"\n{'=' * width}")
+    print(f"  {msg}")
+    print(f"{'=' * width}")
+
+
+def _subprocess_env() -> dict:
+    env = os.environ.copy()
+    env["MPLBACKEND"] = "Agg"
+
+    cache_root = os.path.join(tempfile.gettempdir(), "inverted_pendulum_eval_all")
+    mpl_config = os.path.join(cache_root, "matplotlib")
+    xdg_cache = os.path.join(cache_root, "cache")
+    os.makedirs(mpl_config, exist_ok=True)
+    os.makedirs(xdg_cache, exist_ok=True)
+    env["MPLCONFIGDIR"] = mpl_config
+    env["XDG_CACHE_HOME"] = xdg_cache
+    return env
+
+
+def _should_echo(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    prefixes = (
+        "Device", "Policy", "Checkpoint", "Config", "Tests", "Episodes/pt",
+        "Cache", "Inference timing", "Total", "Per call", "Learned physics",
+        "Plot saved", "Compare plot saved", "Cache saved", "Done",
+    )
+    if stripped.startswith(prefixes):
+        return True
+    if stripped.startswith("[Test"):
+        return True
+    if stripped.startswith("[") and "/" in stripped:
+        return True
+    if "Checkpoint not found" in stripped or stripped.startswith("Traceback"):
+        return True
+    return False
+
+
+def _build_cmd(job: dict, args) -> list[str]:
+    cmd = job["cmd"] + ["--config", args.config]
+    cmd += ["--tests"] + [str(t) for t in args.tests]
+    if args.n_eval_episodes is not None:
+        cmd += ["--n_eval_episodes", str(args.n_eval_episodes)]
+    if args.n_sweep_points is not None:
+        cmd += ["--n_sweep_points", str(args.n_sweep_points)]
+    if args.n_grid is not None:
+        cmd += ["--n_grid", str(args.n_grid)]
+    return cmd
+
+
+def run_job(job: dict, args, job_idx: int, n_jobs: int) -> bool:
+    name = job["name"]
+    cmd = _build_cmd(job, args)
+
+    _print_header(f"[{job_idx}/{n_jobs}]  {name}")
+    print(f"  Command : {' '.join(cmd)}")
+
+    log_path = os.path.join(args.log_dir, f"{name}.log")
+    print(f"  Log     : {log_path}\n")
+
+    if args.dry_run:
+        return True
+
+    t_start = time.time()
+    with open(log_path, "w") as log_file:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=_subprocess_env(),
+        )
+
+        for line in proc.stdout:
+            log_file.write(line)
+            log_file.flush()
+            if _should_echo(line):
+                print(f"  {line.rstrip()}", flush=True)
+
+        proc.wait()
+
+    elapsed = time.time() - t_start
+    ok = proc.returncode == 0
+    status = "DONE" if ok else f"FAILED (exit {proc.returncode})"
+    print(f"\n  {name}: {status} in {elapsed / 60:.1f} min  "
+          f"(log -> {log_path})")
+    return ok
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Run all OOD eval jobs sequentially.")
+    parser.add_argument("--config", default="configs/default.yaml")
+    parser.add_argument("--skip", nargs="*", default=[], metavar="JOB",
+        help="Job names to skip")
+    parser.add_argument("--only", nargs="*", default=None, metavar="JOB",
+        help="Run only these jobs (overrides --skip)")
+    parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3],
+        default=[1, 2, 3],
+        help="Eval stages to run: 1=length, 2=mass, 3=heatmap")
+    parser.add_argument("--n_eval_episodes", type=int, default=None,
+        help="Override episodes per eval point")
+    parser.add_argument("--n_sweep_points", type=int, default=None,
+        help="Override points per 1D sweep")
+    parser.add_argument("--n_grid", type=int, default=None,
+        help="Override heatmap grid size per axis")
+    parser.add_argument("--log_dir", default="logs/eval",
+        help="Directory for per-job eval logs")
+    parser.add_argument("--dry-run", action="store_true",
+        help="Print commands without running them")
+    args = parser.parse_args()
+
+    if not os.path.exists(args.config):
+        sys.exit(f"Config not found: {args.config}")
+
+    os.makedirs(args.log_dir, exist_ok=True)
+
+    valid_names = {j["name"] for j in JOBS}
+    bad = (set(args.only or []) | set(args.skip)) - valid_names
+    if bad:
+        print(f"[warn] Unknown job names: {bad}")
+        print(f"       Valid names: {sorted(valid_names)}\n")
+
+    jobs = JOBS
+    if args.only is not None:
+        jobs = [j for j in jobs if j["name"] in args.only]
+    else:
+        jobs = [j for j in jobs if j["name"] not in args.skip]
+
+    if not jobs:
+        sys.exit("No jobs to run after filtering.")
+
+    print(f"\neval_all  |  {len(jobs)}/{len(JOBS)} jobs")
+    print(f"Config    : {args.config}")
+    print(f"Tests     : {args.tests}")
+    eval_size = []
+    eval_size.append(
+        f"{args.n_sweep_points} sweep pts"
+        if args.n_sweep_points is not None else "script-default sweep pts"
+    )
+    eval_size.append(
+        f"{args.n_grid}x{args.n_grid} heatmap"
+        if args.n_grid is not None else "script-default heatmap"
+    )
+    eval_size.append(
+        f"{args.n_eval_episodes} eps/pt"
+        if args.n_eval_episodes is not None else "script-default eps/pt"
+    )
+    print(f"Eval size : {', '.join(eval_size)}")
+    print(f"Logs      : {args.log_dir}/")
+    if args.dry_run:
+        print("Mode      : dry run")
+    print("\nJobs to run:")
+    for j in jobs:
+        print(f"  - {j['name']}")
+
+    results = {}
+    t_all = time.time()
+    for i, job in enumerate(jobs, 1):
+        ok = run_job(job, args, i, len(jobs))
+        results[job["name"]] = ok
+
+    total_elapsed = time.time() - t_all
+    _print_header(f"Summary  ({total_elapsed / 60:.1f} min total)")
+    for name, ok in results.items():
+        icon = "OK" if ok else "FAIL"
+        print(f"  {icon:<4} {name}")
+
+    failed = [n for n, ok in results.items() if not ok]
+    if failed:
+        print(f"\n  {len(failed)} job(s) failed: {failed}")
+        sys.exit(1)
+    print(f"\n  All {len(results)} eval job(s) completed successfully.")
+
+
+if __name__ == "__main__":
+    main()

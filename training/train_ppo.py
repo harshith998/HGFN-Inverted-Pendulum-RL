@@ -183,7 +183,7 @@ def compute_ppo_loss(policy, obs, actions, old_log_probs, returns, advantages,
 # Main training loop
 # ---------------------------------------------------------------------------
 
-def train(cfg, policy_name: str, plot: bool = True):
+def train(cfg, policy_name: str, plot: bool = True, show_plot: bool = True):
     """
     Train a PPO policy. Returns (log_steps, log_mean_reward, log_mean_length, log_survival)
     so ablation scripts can collect and compare curves without re-running.
@@ -390,7 +390,10 @@ def train(cfg, policy_name: str, plot: bool = True):
         env.close()
     print("Training complete.")
     if plot:
-        _plot_training(log_steps, log_mean_reward, log_mean_length, log_survival, policy_name)
+        _plot_training(
+            log_steps, log_mean_reward, log_mean_length, log_survival,
+            policy_name, show=show_plot,
+        )
     return log_steps, log_mean_reward, log_mean_length, log_survival
 
 
@@ -398,7 +401,7 @@ def train(cfg, policy_name: str, plot: bool = True):
 # Plot
 # ---------------------------------------------------------------------------
 
-def _plot_training(steps, rewards, lengths, survival, policy_name):
+def _plot_training(steps, rewards, lengths, survival, policy_name, show: bool = True):
     fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
     fig.suptitle(f"PPO Training — {policy_name.upper()} policy")
 
@@ -421,7 +424,10 @@ def _plot_training(steps, rewards, lengths, survival, policy_name):
     path = f"checkpoints/{policy_name}_ppo_training_curve.png"
     plt.savefig(path, dpi=150)
     print(f"  plot saved → {path}")
-    plt.show()
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -434,9 +440,11 @@ if __name__ == "__main__":
                         choices=["gnn_mpnn", "gnn_transformer", "mlp"],
                         default="gnn_mpnn")
     parser.add_argument("--config", default="configs/default.yaml")
+    parser.add_argument("--no-show", action="store_true",
+                        help="Save training plots without opening a blocking window")
     args = parser.parse_args()
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    train(cfg, args.policy)
+    train(cfg, args.policy, show_plot=not args.no_show)

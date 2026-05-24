@@ -145,7 +145,7 @@ def compute_td_loss(policy, target, obs, actions, rewards, next_obs, dones, gamm
 # Main training loop
 # ---------------------------------------------------------------------------
 
-def train(cfg, policy_name: str):
+def train(cfg, policy_name: str, show_plot: bool = True):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}  |  Policy: {policy_name}")
 
@@ -289,10 +289,13 @@ def train(cfg, policy_name: str):
 
     env.close()
     print("Training complete.")
-    _plot_training(log_steps, log_mean_reward, log_mean_length, log_survival, policy_name)
+    _plot_training(
+        log_steps, log_mean_reward, log_mean_length, log_survival,
+        policy_name, show=show_plot,
+    )
 
 
-def _plot_training(steps, rewards, lengths, survival, policy_name):
+def _plot_training(steps, rewards, lengths, survival, policy_name, show: bool = True):
     fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
     fig.suptitle(f"DQN Training — {policy_name.upper()} policy")
 
@@ -315,7 +318,10 @@ def _plot_training(steps, rewards, lengths, survival, policy_name):
     path = f"checkpoints/{policy_name}_dqn_training_curve.png"
     plt.savefig(path, dpi=150)
     print(f"  plot saved → {path}")
-    plt.show()
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
 
 
 # Entry point
@@ -325,9 +331,11 @@ if __name__ == "__main__":
     parser.add_argument("--policy", choices=["gnn", "mlp"], default="gnn",
                         help="gnn = GNN-based DQN,  mlp = flat MLP baseline")
     parser.add_argument("--config", default="configs/default.yaml")
+    parser.add_argument("--no-show", action="store_true",
+                        help="Save training plots without opening a blocking window")
     args = parser.parse_args()
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    train(cfg, args.policy)
+    train(cfg, args.policy, show_plot=not args.no_show)

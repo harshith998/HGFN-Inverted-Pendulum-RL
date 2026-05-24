@@ -198,7 +198,7 @@ def _beta_label(policy, variant: str) -> str:
 
 # ── Main training loop ────────────────────────────────────────────────────────
 
-def train(cfg, variant: str = "base", plot: bool = True):
+def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True):
     device  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env_cfg = cfg["environment"]
     ppo_cfg = cfg["ppo"]
@@ -383,14 +383,15 @@ def train(cfg, variant: str = "base", plot: bool = True):
 
     if plot:
         _plot_training(log_steps, log_mean_reward, log_mean_length,
-                       log_survival, log_beta, variant)
+                       log_survival, log_beta, variant, show=show_plot)
 
     return log_steps, log_mean_reward, log_mean_length, log_survival
 
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
-def _plot_training(steps, rewards, lengths, survival, betas, variant: str = "base"):
+def _plot_training(steps, rewards, lengths, survival, betas, variant: str = "base",
+                   show: bool = True):
     fig, axes = plt.subplots(4, 1, figsize=(11, 11), sharex=True)
     fig.suptitle(f"HGFN-{variant} PPO Training")
 
@@ -414,7 +415,10 @@ def _plot_training(steps, rewards, lengths, survival, betas, variant: str = "bas
     path = f"checkpoints/hgfn_{variant}_ppo_training_curve.png"
     plt.savefig(path, dpi=150)
     print(f"  plot saved → {path}")
-    plt.show()
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -426,9 +430,11 @@ if __name__ == "__main__":
     parser.add_argument("--variant", default="base",
         choices=list(VARIANTS),
         help="HGFN variant to train (default: base)")
+    parser.add_argument("--no-show", action="store_true",
+        help="Save training plots without opening a blocking window")
     args = parser.parse_args()
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    train(cfg, variant=args.variant)
+    train(cfg, variant=args.variant, show_plot=not args.no_show)
