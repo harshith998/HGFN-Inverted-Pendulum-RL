@@ -126,3 +126,22 @@ class BasePPOPolicy(ABC, nn.Module):
         return (float(action.squeeze()),
                 float(log_prob.squeeze()),
                 float(value.squeeze()))
+
+    @torch.no_grad()
+    def get_deterministic_action(self, obs: dict, device: torch.device) -> float:
+        """
+        Evaluation action: use the policy mean instead of sampling.
+
+        PPO still trains stochastically through get_action_and_value(); this helper
+        removes rollout noise when measuring a trained checkpoint.
+        """
+        obs_t = {
+            k: torch.tensor(v, dtype=torch.float32 if v.dtype != np.int64 else torch.int64)
+               .unsqueeze(0).to(device)
+            for k, v in obs.items()
+        }
+        emb = self.encode(obs_t)
+        actor_h = self.actor_trunk(emb)
+        raw_mean = self.mean_head(actor_h)
+        action = torch.tanh(raw_mean) * self.max_force
+        return float(action.squeeze())

@@ -171,6 +171,8 @@ def compute_ppo_loss(policy, obs, actions, old_log_probs, returns, advantages,
 def _get_beta_val(policy, variant: str) -> float:
     """Extract a representative β scalar for logging (variant-aware)."""
     layer = policy.encoder.icga_layers[0]
+    if not hasattr(layer, "physics_beta") and variant != "directional":
+        return 0.0
     if variant == "directional":
         b_fwd = float(torch.tanh(layer.physics_beta_fwd).item())
         b_bwd = float(torch.tanh(layer.physics_beta_bwd).item())
@@ -184,6 +186,8 @@ def _get_beta_val(policy, variant: str) -> float:
 def _beta_label(policy, variant: str) -> str:
     """Human-readable beta string for the log line."""
     layer = policy.encoder.icga_layers[0]
+    if not hasattr(layer, "physics_beta") and variant != "directional":
+        return "β n/a"
     if variant == "directional":
         b_fwd = float(torch.tanh(layer.physics_beta_fwd).item())
         b_bwd = float(torch.tanh(layer.physics_beta_bwd).item())

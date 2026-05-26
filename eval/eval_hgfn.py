@@ -2,20 +2,21 @@
 #      python3.12 eval/eval_hgfn.py --variant perhead
 #      python3.12 eval/eval_hgfn.py --checkpoint checkpoints/hgfn_base_ppo_best.pt
 #      python3.12 eval/eval_hgfn.py --tests 1 2        # skip heatmap
-#      python3.12 eval/eval_hgfn.py --tests 3           # heatmap only (uses cache)
+#      python3.12 eval/eval_hgfn.py --tests 3           # heatmap only
 #      python3.12 eval/eval_hgfn.py --compare           # run all variants side-by-side
 
 """
 OOD evaluation suite for the Hamiltonian Graph Flow Network (HGFN).
 
-Identical structure to eval_ppo.py — same three tests, same plots, same cache
+Identical structure to eval_ppo.py — same tests and plots
 format — so results are directly comparable across all PPO baselines.
 
 Tests
 -----
   1. 1D sweep — link_length   (100 pts × 10 eps each)
   2. 1D sweep — link_mass     (100 pts × 10 eps each)
-  3. 2D heatmap — link_length × link_mass  (20×20 grid, reuses Tests 1+2 cache)
+  3. 2D heatmap — link_length × link_mass  (20×20 grid)
+  4. Few-shot OOD adaptation on far-OOD parameter points
 
 Variants
 --------
@@ -37,6 +38,13 @@ import matplotlib.patches as mpatches
 
 from env.pendulum_env import VariablePendulumEnv
 from models.hgfn import load_hgfn_variant, VARIANTS
+from eval.few_shot import (
+    plot_few_shot,
+    run_few_shot,
+    save_few_shot_results,
+    select_eval_action,
+    summarize_few_shot,
+)
 
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
@@ -56,6 +64,8 @@ VARIANT_COLORS = {
     "directional": "#27ae60",
     "gravity":     "#c0392b",
     "perc":        "#2980b9",
+    "no_physics":  "#555555",
+    "shuffled":    "#d4a017",
 }
 
 
@@ -97,6 +107,8 @@ def load_policy(checkpoint_path: str, cfg: dict, device: torch.device,
 def _beta_summary(policy, variant: str) -> str:
     """Single-line physics-weight summary for the eval header."""
     layer = policy.encoder.icga_layers[0]
+    if not hasattr(layer, "physics_beta") and variant != "directional":
+        return "β=n/a"
     if variant == "directional":
         import torch
         b_fwd = float(torch.tanh(layer.physics_beta_fwd).item())
@@ -135,7 +147,8 @@ def make_fixed_env(cfg: dict, link_length: float, link_mass: float,
 
 # ── Core evaluation ───────────────────────────────────────────────────────────
 
-def eval_point(policy, env, n_episodes: int, device: torch.device) -> float:
+def eval_point(policy, env, n_episodes: int, device: torch.device,
+               stochastic_eval: bool = False) -> float:
     rewards = []
     for _ in range(n_episodes):
         try:
@@ -143,7 +156,8 @@ def eval_point(policy, env, n_episodes: int, device: torch.device) -> float:
             ep_reward = 0.0
             done = False
             while not done:
-                action, _, _ = policy.get_action(obs, device)
+                action = select_eval_action(
+                    policy, obs, device, stochastic=stochastic_eval)
                 obs, reward, terminated, truncated, _ = env.step(
                     np.array([action], dtype=np.float32))
                 ep_reward += reward
@@ -163,33 +177,9 @@ def compute_eval_range(lo: float, hi: float) -> tuple[float, float]:
     return eval_lo, eval_hi
 
 
-# ── Cache ─────────────────────────────────────────────────────────────────────
-
-def _key(length: float, mass: float) -> tuple:
-    return (round(float(length), 6), round(float(mass), 6))
-
-
-def load_cache(path: str) -> dict:
-    if not os.path.exists(path):
-        return {}
-    data = np.load(path)
-    return {_key(l, m): float(r)
-            for l, m, r in zip(data["lengths"], data["masses"], data["rewards"])}
-
-
-def save_cache(path: str, cache: dict):
-    if not cache:
-        return
-    keys    = list(cache.keys())
-    lengths = np.array([k[0] for k in keys], dtype=np.float64)
-    masses  = np.array([k[1] for k in keys], dtype=np.float64)
-    rewards = np.array([cache[k] for k in keys], dtype=np.float64)
-    np.savez(path, lengths=lengths, masses=masses, rewards=rewards)
-
-
 # ── Test 1 — 1D link_length sweep ────────────────────────────────────────────
 
-def run_test1(policy, cfg, device, cache, n_episodes, n_points):
+def run_test1(policy, cfg, device, n_episodes, n_points, stochastic_eval=False):
     env_cfg = cfg["environment"]
     len_lo, len_hi = env_cfg["link_length_range"]
     mass_mid = sum(env_cfg["link_mass_range"]) / 2.0
@@ -206,16 +196,11 @@ def run_test1(policy, cfg, device, cache, n_episodes, n_points):
     print(f"{'='*60}")
 
     for i, length in enumerate(length_vals):
-        k = _key(length, mass_mid)
-        if k in cache:
-            r   = cache[k]
-            tag = "cached"
-        else:
-            env = make_fixed_env(cfg, link_length=length, link_mass=mass_mid)
-            r   = eval_point(policy, env, n_episodes, device)
-            env.close()
-            cache[k] = r
-            tag = "IN " if len_lo <= length <= len_hi else "OOD"
+        env = make_fixed_env(cfg, link_length=length, link_mass=mass_mid)
+        r = eval_point(policy, env, n_episodes, device,
+                       stochastic_eval=stochastic_eval)
+        env.close()
+        tag = "IN " if len_lo <= length <= len_hi else "OOD"
 
         rewards.append(r)
         print(f"  [{i+1:3d}/{n_points}] length={length:.4f}m  reward={r:8.2f}  [{tag}]")
@@ -225,7 +210,7 @@ def run_test1(policy, cfg, device, cache, n_episodes, n_points):
 
 # ── Test 2 — 1D link_mass sweep ───────────────────────────────────────────────
 
-def run_test2(policy, cfg, device, cache, n_episodes, n_points):
+def run_test2(policy, cfg, device, n_episodes, n_points, stochastic_eval=False):
     env_cfg = cfg["environment"]
     mass_lo, mass_hi = env_cfg["link_mass_range"]
     len_mid = sum(env_cfg["link_length_range"]) / 2.0
@@ -242,16 +227,11 @@ def run_test2(policy, cfg, device, cache, n_episodes, n_points):
     print(f"{'='*60}")
 
     for i, mass in enumerate(mass_vals):
-        k = _key(len_mid, mass)
-        if k in cache:
-            r   = cache[k]
-            tag = "cached"
-        else:
-            env = make_fixed_env(cfg, link_length=len_mid, link_mass=mass)
-            r   = eval_point(policy, env, n_episodes, device)
-            env.close()
-            cache[k] = r
-            tag = "IN " if mass_lo <= mass <= mass_hi else "OOD"
+        env = make_fixed_env(cfg, link_length=len_mid, link_mass=mass)
+        r = eval_point(policy, env, n_episodes, device,
+                       stochastic_eval=stochastic_eval)
+        env.close()
+        tag = "IN " if mass_lo <= mass <= mass_hi else "OOD"
 
         rewards.append(r)
         print(f"  [{i+1:3d}/{n_points}] mass={mass:.4f}kg  reward={r:8.2f}  [{tag}]")
@@ -261,7 +241,7 @@ def run_test2(policy, cfg, device, cache, n_episodes, n_points):
 
 # ── Test 3 — 2D heatmap (link_length × link_mass) ────────────────────────────
 
-def run_test3(policy, cfg, device, cache, n_episodes, n_grid):
+def run_test3(policy, cfg, device, n_episodes, n_grid, stochastic_eval=False):
     env_cfg = cfg["environment"]
     len_lo,  len_hi  = env_cfg["link_length_range"]
     mass_lo, mass_hi = env_cfg["link_mass_range"]
@@ -273,35 +253,25 @@ def run_test3(policy, cfg, device, cache, n_episodes, n_grid):
     mass_vals   = np.linspace(mass_eval_lo, mass_eval_hi, n_grid)
     reward_grid = np.full((n_grid, n_grid), np.nan)
 
-    to_compute = []
-    cache_hits = 0
-    for i, length in enumerate(length_vals):
-        for j, mass in enumerate(mass_vals):
-            k = _key(length, mass)
-            if k in cache:
-                reward_grid[j, i] = cache[k]
-                cache_hits += 1
-            else:
-                to_compute.append((i, j, length, mass))
-
     total = n_grid * n_grid
     print(f"\n{'='*60}")
     print(f"[Test 3] 2D Heatmap — {n_grid}×{n_grid} grid ({total} cells)")
     print(f"  Length : {len_eval_lo:.3f}m → {len_eval_hi:.3f}m")
     print(f"  Mass   : {mass_eval_lo:.3f}kg → {mass_eval_hi:.3f}kg")
-    print(f"  Cache hits: {cache_hits}/{total} | To compute: {len(to_compute)}")
     print(f"{'='*60}")
 
-    for idx, (i, j, length, mass) in enumerate(to_compute):
-        env = make_fixed_env(cfg, link_length=length, link_mass=mass)
-        r   = eval_point(policy, env, n_episodes, device)
-        env.close()
-        k                 = _key(length, mass)
-        cache[k]          = r
-        reward_grid[j, i] = r
-        if (idx + 1) % 10 == 0 or (idx + 1) == len(to_compute):
-            print(f"  [{idx+1:4d}/{len(to_compute)}] "
-                  f"length={length:.3f}m  mass={mass:.3f}kg  reward={r:.2f}")
+    done = 0
+    for i, length in enumerate(length_vals):
+        for j, mass in enumerate(mass_vals):
+            env = make_fixed_env(cfg, link_length=length, link_mass=mass)
+            r = eval_point(policy, env, n_episodes, device,
+                           stochastic_eval=stochastic_eval)
+            env.close()
+            reward_grid[j, i] = r
+            done += 1
+            if done % 10 == 0 or done == total:
+                print(f"  [{done:4d}/{total}] "
+                      f"length={length:.3f}m  mass={mass:.3f}kg  reward={r:.2f}")
 
     return (length_vals, mass_vals, reward_grid,
             (len_lo, len_hi), (mass_lo, mass_hi))
@@ -402,7 +372,6 @@ def run_compare(cfg, device, args):
     mass_vals   = np.linspace(mass_eval_lo, mass_eval_hi, args.n_sweep_points)
 
     os.makedirs("eval/plots", exist_ok=True)
-    os.makedirs("eval/cache", exist_ok=True)
 
     fig_len, ax_len = plt.subplots(figsize=(12, 5))
     fig_mass, ax_mass = plt.subplots(figsize=(12, 5))
@@ -431,32 +400,27 @@ def run_compare(cfg, device, args):
         policy = load_policy(ckpt, cfg, device, variant=variant)
         color  = VARIANT_COLORS.get(variant, "#555555")
 
-        cache_path = f"eval/cache/hgfn_{variant}_ppo_ood_cache.npz"
-        cache      = load_cache(cache_path)
-
         # Length sweep
         l_rewards = []
         for length in length_vals:
-            k = _key(length, mass_mid)
-            if k not in cache:
-                env = make_fixed_env(cfg, link_length=length, link_mass=mass_mid)
-                cache[k] = eval_point(policy, env, args.n_eval_episodes, device)
-                env.close()
-            l_rewards.append(cache[k])
-        save_cache(cache_path, cache)
+            env = make_fixed_env(cfg, link_length=length, link_mass=mass_mid)
+            r = eval_point(
+                policy, env, args.n_eval_episodes, device,
+                stochastic_eval=args.stochastic_eval)
+            env.close()
+            l_rewards.append(r)
         ax_len.plot(length_vals, l_rewards, color=color, linewidth=1.5,
                     label=f"HGFN-{variant}")
 
         # Mass sweep
         m_rewards = []
         for mass in mass_vals:
-            k = _key(len_mid, mass)
-            if k not in cache:
-                env = make_fixed_env(cfg, link_length=len_mid, link_mass=mass)
-                cache[k] = eval_point(policy, env, args.n_eval_episodes, device)
-                env.close()
-            m_rewards.append(cache[k])
-        save_cache(cache_path, cache)
+            env = make_fixed_env(cfg, link_length=len_mid, link_mass=mass)
+            r = eval_point(
+                policy, env, args.n_eval_episodes, device,
+                stochastic_eval=args.stochastic_eval)
+            env.close()
+            m_rewards.append(r)
         ax_mass.plot(mass_vals, m_rewards, color=color, linewidth=1.5,
                      label=f"HGFN-{variant}")
 
@@ -491,11 +455,22 @@ def main():
         help="HGFN variant to evaluate (default: base)")
     parser.add_argument("--checkpoint", default=None,
         help="Path to .pt file. Defaults to checkpoints/hgfn_{variant}_ppo_best.pt")
-    parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3],
+    parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3, 4],
         default=[1, 2, 3])
     parser.add_argument("--n_eval_episodes", type=int, default=N_EVAL_EPISODES)
     parser.add_argument("--n_sweep_points",  type=int, default=N_SWEEP_POINTS)
     parser.add_argument("--n_grid",          type=int, default=N_GRID_1D)
+    parser.add_argument("--stochastic_eval", action="store_true",
+        help="Sample from the Gaussian during eval instead of using the mean action")
+    parser.add_argument("--few_shot_budgets", nargs="+", type=int,
+        default=[0, 1, 5, 10, 25],
+        help="Fine-tuning episode budgets for Test 4")
+    parser.add_argument("--few_shot_tasks", type=int, default=4,
+        help="Number of far-OOD corner tasks for Test 4")
+    parser.add_argument("--few_shot_epochs", type=int, default=4,
+        help="PPO epochs per few-shot adaptation batch")
+    parser.add_argument("--few_shot_lr", type=float, default=3e-5,
+        help="Learning rate for Test 4 adaptation")
     parser.add_argument("--compare", action="store_true",
         help="Run all available variants and generate comparison plots")
     args = parser.parse_args()
@@ -528,6 +503,7 @@ def main():
     print(f"Config     : {args.config}")
     print(f"Tests      : {args.tests}")
     print(f"Episodes/pt: {args.n_eval_episodes}")
+    print(f"Eval mode  : {'stochastic' if args.stochastic_eval else 'deterministic'}")
 
     policy = load_policy(checkpoint, cfg, device, variant=variant)
 
@@ -540,10 +516,10 @@ def main():
     _timing_env.close()
     N_TIMING = 1000
     for _ in range(50):
-        policy.get_action(_obs, device)
+        select_eval_action(policy, _obs, device, stochastic=args.stochastic_eval)
     _t0 = time.perf_counter()
     for _ in range(N_TIMING):
-        policy.get_action(_obs, device)
+        select_eval_action(policy, _obs, device, stochastic=args.stochastic_eval)
     _ms = (time.perf_counter() - _t0) * 1000
     print(f"\nInference timing ({N_TIMING} calls):")
     print(f"  Total   : {_ms:.2f} ms")
@@ -551,40 +527,60 @@ def main():
           f"({1000 / (_ms / N_TIMING):.0f} inferences/sec)\n")
 
     os.makedirs("eval/plots", exist_ok=True)
-    os.makedirs("eval/cache", exist_ok=True)
-    cache_path = f"eval/cache/hgfn_{variant}_ppo_ood_cache.npz"
-    cache      = load_cache(cache_path)
-    print(f"Cache      : {len(cache)} existing entries  ({cache_path})")
+    os.makedirs("eval/results", exist_ok=True)
 
-    try:
-        if 1 in args.tests:
-            l_vals, l_rewards, l_lo, l_hi = run_test1(
-                policy, cfg, device, cache,
-                args.n_eval_episodes, args.n_sweep_points)
-            save_cache(cache_path, cache)
-            plot_1d(l_vals, l_rewards, l_lo, l_hi,
-                    "Link Length", "m", "eval/plots", variant=variant)
+    if 1 in args.tests:
+        l_vals, l_rewards, l_lo, l_hi = run_test1(
+            policy, cfg, device, args.n_eval_episodes, args.n_sweep_points,
+            stochastic_eval=args.stochastic_eval)
+        plot_1d(l_vals, l_rewards, l_lo, l_hi,
+                "Link Length", "m", "eval/plots", variant=variant)
 
-        if 2 in args.tests:
-            m_vals, m_rewards, m_lo, m_hi = run_test2(
-                policy, cfg, device, cache,
-                args.n_eval_episodes, args.n_sweep_points)
-            save_cache(cache_path, cache)
-            plot_1d(m_vals, m_rewards, m_lo, m_hi,
-                    "Link Mass", "kg", "eval/plots", variant=variant)
+    if 2 in args.tests:
+        m_vals, m_rewards, m_lo, m_hi = run_test2(
+            policy, cfg, device, args.n_eval_episodes, args.n_sweep_points,
+            stochastic_eval=args.stochastic_eval)
+        plot_1d(m_vals, m_rewards, m_lo, m_hi,
+                "Link Mass", "kg", "eval/plots", variant=variant)
 
-        if 3 in args.tests:
-            l_v, m_v, r_grid, l_bounds, m_bounds = run_test3(
-                policy, cfg, device, cache,
-                args.n_eval_episodes, args.n_grid)
-            save_cache(cache_path, cache)
-            plot_2d(l_v, m_v, r_grid, l_bounds, m_bounds,
-                    "eval/plots", variant=variant)
+    if 3 in args.tests:
+        l_v, m_v, r_grid, l_bounds, m_bounds = run_test3(
+            policy, cfg, device, args.n_eval_episodes, args.n_grid,
+            stochastic_eval=args.stochastic_eval)
+        plot_2d(l_v, m_v, r_grid, l_bounds, m_bounds,
+                "eval/plots", variant=variant)
+        np.savez(
+            f"eval/results/hgfn_{variant}_ppo_test3.npz",
+            lengths=l_v, masses=m_v, rewards=r_grid,
+            len_bounds=np.array(l_bounds), mass_bounds=np.array(m_bounds),
+        )
 
-    finally:
-        save_cache(cache_path, cache)
-        print(f"\nCache saved: {len(cache)} total entries → {cache_path}")
-        print("Done.")
+    if 4 in args.tests:
+        tasks, rewards = run_few_shot(
+            policy, make_fixed_env, cfg, device,
+            budgets=args.few_shot_budgets,
+            n_tasks=args.few_shot_tasks,
+            eval_episodes=args.n_eval_episodes,
+            adapt_lr=args.few_shot_lr,
+            adapt_epochs=args.few_shot_epochs,
+            adapt_batch_size=cfg["ppo"]["mini_batch_size"],
+            stochastic_eval=args.stochastic_eval,
+        )
+        budgets = sorted(set([0] + args.few_shot_budgets))
+        result_path = f"eval/results/hgfn_{variant}_ppo_test4_fewshot.npz"
+        save_few_shot_results(result_path, tasks, budgets, rewards)
+        plot_few_shot(
+            f"eval/plots/hgfn_{variant}_ppo_test4_fewshot.png",
+            f"Few-Shot OOD Adaptation | HGFN-{variant} PPO",
+            tasks, budgets, rewards,
+        )
+        summary = summarize_few_shot(budgets, rewards)
+        print("\n[Test 4 summary]")
+        for k, v in summary.items():
+            print(f"  {k}: {v:.2f}")
+        print(f"  Results saved -> {result_path}")
+
+    print("Done.")
 
 
 if __name__ == "__main__":

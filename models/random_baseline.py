@@ -37,6 +37,9 @@ class RandomPPOPolicy:
         force = float(np.random.uniform(-self.max_force, self.max_force))
         return force, 0.0, 0.0
 
+    def get_deterministic_action(self, obs: dict, device) -> float:
+        return float(np.random.uniform(-self.max_force, self.max_force))
+
     def eval(self):
         return self
 

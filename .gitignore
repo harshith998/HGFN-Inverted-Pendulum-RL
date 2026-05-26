@@ -20,6 +20,8 @@ env/lib/
 checkpoints/
 runs/
 logs/
+eval/results/
+eval/plots/*test4*.png
 *.pt
 *.pth
 

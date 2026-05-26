@@ -2,7 +2,7 @@
 #      python3.12 eval/eval_dqn.py --policy mlp
 #      python3.12 eval/eval_dqn.py --policy random
 #      python3.12 eval/eval_dqn.py --policy gnn --tests 1 2       # skip heatmap
-#      python3.12 eval/eval_dqn.py --policy gnn --tests 3          # heatmap only (uses cache)
+#      python3.12 eval/eval_dqn.py --policy gnn --tests 3          # heatmap only
 #      python3.12 eval/eval_dqn.py --policy gnn --checkpoint checkpoints/my_model.pt
 
 """
@@ -11,7 +11,8 @@ Tests
 -----
   1. 1D sweep — link_length   (100 pts × 200 eps each)
   2. 1D sweep — link_mass     (100 pts × 200 eps each)
-  3. 2D heatmap — link_length × link_mass  (20×20 grid, reuses Tests 1+2 cache)
+  3. 2D heatmap — link_length × link_mass  (20×20 grid)
+  4. Few-shot adaptation is not implemented for DQN in this script
 """
 
 import sys
@@ -144,38 +145,10 @@ def compute_eval_range(lo: float, hi: float) -> tuple[float, float]:
 
 
 # ---------------------------------------------------------------------------
-# Cache  (persists between runs so Test 3 reuses Tests 1+2)
-# ---------------------------------------------------------------------------
-
-def _key(length: float, mass: float) -> tuple:
-    return (round(float(length), 6), round(float(mass), 6))
-
-
-def load_cache(path: str) -> dict:
-    if not os.path.exists(path):
-        return {}
-    data    = np.load(path)
-    lengths = data["lengths"]
-    masses  = data["masses"]
-    rewards = data["rewards"]
-    return {_key(l, m): float(r) for l, m, r in zip(lengths, masses, rewards)}
-
-
-def save_cache(path: str, cache: dict):
-    if not cache:
-        return
-    keys    = list(cache.keys())
-    lengths = np.array([k[0] for k in keys], dtype=np.float64)
-    masses  = np.array([k[1] for k in keys], dtype=np.float64)
-    rewards = np.array([cache[k] for k in keys], dtype=np.float64)
-    np.savez(path, lengths=lengths, masses=masses, rewards=rewards)
-
-
-# ---------------------------------------------------------------------------
 # Test 1 — 1D link_length sweep
 # ---------------------------------------------------------------------------
 
-def run_test1(policy, cfg, act_bins, device, cache, n_episodes, n_points):
+def run_test1(policy, cfg, act_bins, device, n_episodes, n_points):
     env_cfg  = cfg["environment"]
     len_lo, len_hi = env_cfg["link_length_range"]
     mass_mid = sum(env_cfg["link_mass_range"]) / 2.0
@@ -192,16 +165,10 @@ def run_test1(policy, cfg, act_bins, device, cache, n_episodes, n_points):
     print(f"{'='*60}")
 
     for i, length in enumerate(length_vals):
-        k = _key(length, mass_mid)
-        if k in cache:
-            r = cache[k]
-            tag = "cached"
-        else:
-            env = make_fixed_env(cfg, link_length=length, link_mass=mass_mid)
-            r   = eval_point(policy, env, n_episodes, act_bins, device)
-            env.close()
-            cache[k] = r
-            tag = "IN " if len_lo <= length <= len_hi else "OOD"
+        env = make_fixed_env(cfg, link_length=length, link_mass=mass_mid)
+        r = eval_point(policy, env, n_episodes, act_bins, device)
+        env.close()
+        tag = "IN " if len_lo <= length <= len_hi else "OOD"
 
         rewards.append(r)
         print(f"  [{i+1:3d}/{n_points}] length={length:.4f}m  reward={r:8.2f}  [{tag}]")
@@ -213,7 +180,7 @@ def run_test1(policy, cfg, act_bins, device, cache, n_episodes, n_points):
 # Test 2 — 1D link_mass sweep
 # ---------------------------------------------------------------------------
 
-def run_test2(policy, cfg, act_bins, device, cache, n_episodes, n_points):
+def run_test2(policy, cfg, act_bins, device, n_episodes, n_points):
     env_cfg    = cfg["environment"]
     mass_lo, mass_hi = env_cfg["link_mass_range"]
     len_mid    = sum(env_cfg["link_length_range"]) / 2.0
@@ -230,16 +197,10 @@ def run_test2(policy, cfg, act_bins, device, cache, n_episodes, n_points):
     print(f"{'='*60}")
 
     for i, mass in enumerate(mass_vals):
-        k = _key(len_mid, mass)
-        if k in cache:
-            r = cache[k]
-            tag = "cached"
-        else:
-            env = make_fixed_env(cfg, link_length=len_mid, link_mass=mass)
-            r   = eval_point(policy, env, n_episodes, act_bins, device)
-            env.close()
-            cache[k] = r
-            tag = "IN " if mass_lo <= mass <= mass_hi else "OOD"
+        env = make_fixed_env(cfg, link_length=len_mid, link_mass=mass)
+        r = eval_point(policy, env, n_episodes, act_bins, device)
+        env.close()
+        tag = "IN " if mass_lo <= mass <= mass_hi else "OOD"
 
         rewards.append(r)
         print(f"  [{i+1:3d}/{n_points}] mass={mass:.4f}kg  reward={r:8.2f}  [{tag}]")
@@ -251,7 +212,7 @@ def run_test2(policy, cfg, act_bins, device, cache, n_episodes, n_points):
 # Test 3 — 2D heatmap (link_length × link_mass)
 # ---------------------------------------------------------------------------
 
-def run_test3(policy, cfg, act_bins, device, cache, n_episodes, n_grid):
+def run_test3(policy, cfg, act_bins, device, n_episodes, n_grid):
     env_cfg  = cfg["environment"]
     len_lo, len_hi   = env_cfg["link_length_range"]
     mass_lo, mass_hi = env_cfg["link_mass_range"]
@@ -264,36 +225,24 @@ def run_test3(policy, cfg, act_bins, device, cache, n_episodes, n_grid):
 
     reward_grid = np.full((n_grid, n_grid), np.nan)
 
-    # Identify which cells need computation (cache miss)
-    to_compute  = []
-    cache_hits  = 0
-    for i, length in enumerate(length_vals):
-        for j, mass in enumerate(mass_vals):
-            k = _key(length, mass)
-            if k in cache:
-                reward_grid[j, i] = cache[k]
-                cache_hits += 1
-            else:
-                to_compute.append((i, j, length, mass))
-
     total = n_grid * n_grid
     print(f"\n{'='*60}")
     print(f"[Test 3] 2D Heatmap — {n_grid}×{n_grid} grid ({total} cells)")
     print(f"  Length : {len_eval_lo:.3f}m → {len_eval_hi:.3f}m")
     print(f"  Mass   : {mass_eval_lo:.3f}kg → {mass_eval_hi:.3f}kg")
-    print(f"  Cache hits: {cache_hits}/{total} | To compute: {len(to_compute)}")
     print(f"{'='*60}")
 
-    for idx, (i, j, length, mass) in enumerate(to_compute):
-        env = make_fixed_env(cfg, link_length=length, link_mass=mass)
-        r   = eval_point(policy, env, n_episodes, act_bins, device)
-        env.close()
-        k             = _key(length, mass)
-        cache[k]      = r
-        reward_grid[j, i] = r
-        if (idx + 1) % 10 == 0 or (idx + 1) == len(to_compute):
-            print(f"  [{idx+1:4d}/{len(to_compute)}] "
-                  f"length={length:.3f}m  mass={mass:.3f}kg  reward={r:.2f}")
+    done = 0
+    for i, length in enumerate(length_vals):
+        for j, mass in enumerate(mass_vals):
+            env = make_fixed_env(cfg, link_length=length, link_mass=mass)
+            r = eval_point(policy, env, n_episodes, act_bins, device)
+            env.close()
+            reward_grid[j, i] = r
+            done += 1
+            if done % 10 == 0 or done == total:
+                print(f"  [{done:4d}/{total}] "
+                      f"length={length:.3f}m  mass={mass:.3f}kg  reward={r:.2f}")
 
     return (length_vals, mass_vals, reward_grid,
             (len_lo, len_hi), (mass_lo, mass_hi))
@@ -393,7 +342,7 @@ def main():
     parser.add_argument("--config",   default="configs/default.yaml")
     parser.add_argument("--checkpoint", default=None,
         help="Path to .pt checkpoint. Defaults to checkpoints/{policy}_dqn_best.pt")
-    parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3],
+    parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3, 4],
         default=[1, 2, 3], help="Which tests to run (default: 1 2 3)")
     parser.add_argument("--n_eval_episodes", type=int, default=N_EVAL_EPISODES,
         help=f"Episodes per eval point (default {N_EVAL_EPISODES})")
@@ -405,6 +354,11 @@ def main():
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
+
+    if 4 in args.tests:
+        raise NotImplementedError(
+            "Test 4 few-shot adaptation is implemented for PPO/HGFN policies. "
+            "DQN needs a separate replay-buffer/target-network adaptation protocol.")
 
     checkpoint = args.checkpoint or f"checkpoints/{args.policy}_dqn_best.pt"
     if args.policy != "random" and not os.path.exists(checkpoint):
@@ -448,41 +402,35 @@ def main():
           f"({1000 / (_elapsed_ms / N_TIMING):.0f} inferences/sec)\n")
 
     os.makedirs("eval/plots", exist_ok=True)
-    os.makedirs("eval/cache", exist_ok=True)
-    cache_path = f"eval/cache/{args.policy}_dqn_ood_cache.npz"
-    cache      = load_cache(cache_path)
-    print(f"Cache      : {len(cache)} existing entries  ({cache_path})")
+    os.makedirs("eval/results", exist_ok=True)
 
-    try:
-        if 1 in args.tests:
-            l_vals, l_rewards, l_lo, l_hi = run_test1(
-                policy, cfg, act_bins, device, cache,
-                args.n_eval_episodes, args.n_sweep_points)
-            save_cache(cache_path, cache)
-            plot_1d(l_vals, l_rewards, l_lo, l_hi,
-                    "Link Length", "m", args.policy, "eval/plots")
+    if 1 in args.tests:
+        l_vals, l_rewards, l_lo, l_hi = run_test1(
+            policy, cfg, act_bins, device,
+            args.n_eval_episodes, args.n_sweep_points)
+        plot_1d(l_vals, l_rewards, l_lo, l_hi,
+                "Link Length", "m", args.policy, "eval/plots")
 
-        if 2 in args.tests:
-            m_vals, m_rewards, m_lo, m_hi = run_test2(
-                policy, cfg, act_bins, device, cache,
-                args.n_eval_episodes, args.n_sweep_points)
-            save_cache(cache_path, cache)
-            plot_1d(m_vals, m_rewards, m_lo, m_hi,
-                    "Link Mass", "kg", args.policy, "eval/plots")
+    if 2 in args.tests:
+        m_vals, m_rewards, m_lo, m_hi = run_test2(
+            policy, cfg, act_bins, device,
+            args.n_eval_episodes, args.n_sweep_points)
+        plot_1d(m_vals, m_rewards, m_lo, m_hi,
+                "Link Mass", "kg", args.policy, "eval/plots")
 
-        if 3 in args.tests:
-            l_v, m_v, r_grid, l_bounds, m_bounds = run_test3(
-                policy, cfg, act_bins, device, cache,
-                args.n_eval_episodes, args.n_grid)
-            save_cache(cache_path, cache)
-            plot_2d(l_v, m_v, r_grid, l_bounds, m_bounds,
-                    args.policy, "eval/plots")
+    if 3 in args.tests:
+        l_v, m_v, r_grid, l_bounds, m_bounds = run_test3(
+            policy, cfg, act_bins, device,
+            args.n_eval_episodes, args.n_grid)
+        plot_2d(l_v, m_v, r_grid, l_bounds, m_bounds,
+                args.policy, "eval/plots")
+        np.savez(
+            f"eval/results/{args.policy}_dqn_test3.npz",
+            lengths=l_v, masses=m_v, rewards=r_grid,
+            len_bounds=np.array(l_bounds), mass_bounds=np.array(m_bounds),
+        )
 
-    finally:
-        # Always persist cache even if interrupted mid-run (Ctrl+C safe)
-        save_cache(cache_path, cache)
-        print(f"\nCache saved: {len(cache)} total entries → {cache_path}")
-        print("Done.")
+    print("Done.")
 
 
 if __name__ == "__main__":

@@ -22,6 +22,8 @@ Jobs (in order)
   hgfn_directional
   hgfn_gravity
   hgfn_perc
+  hgfn_no_physics
+  hgfn_shuffled
 """
 
 import argparse
@@ -43,6 +45,8 @@ JOBS = [
     {"name": "hgfn_directional",    "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "directional"]},
     {"name": "hgfn_gravity",        "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "gravity"]},
     {"name": "hgfn_perc",           "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "perc"]},
+    {"name": "hgfn_no_physics",     "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "no_physics"]},
+    {"name": "hgfn_shuffled",       "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "shuffled"]},
 ]
 
 
@@ -73,8 +77,8 @@ def _should_echo(line: str) -> bool:
         return False
     prefixes = (
         "Device", "Policy", "Checkpoint", "Config", "Tests", "Episodes/pt",
-        "Cache", "Inference timing", "Total", "Per call", "Learned physics",
-        "Plot saved", "Compare plot saved", "Cache saved", "Done",
+        "Inference timing", "Total", "Per call", "Learned physics",
+        "Plot saved", "Compare plot saved", "Done",
     )
     if stripped.startswith(prefixes):
         return True
@@ -87,21 +91,37 @@ def _should_echo(line: str) -> bool:
     return False
 
 
-def _build_cmd(job: dict, args) -> list[str]:
+def _build_cmd(job: dict, args) -> list[str] | None:
     cmd = job["cmd"] + ["--config", args.config]
-    cmd += ["--tests"] + [str(t) for t in args.tests]
+    tests = list(args.tests)
+    if job["name"].startswith("dqn_"):
+        tests = [t for t in tests if t != 4]
+        if not tests:
+            return None
+    cmd += ["--tests"] + [str(t) for t in tests]
     if args.n_eval_episodes is not None:
         cmd += ["--n_eval_episodes", str(args.n_eval_episodes)]
     if args.n_sweep_points is not None:
         cmd += ["--n_sweep_points", str(args.n_sweep_points)]
     if args.n_grid is not None:
         cmd += ["--n_grid", str(args.n_grid)]
+    if not job["name"].startswith("dqn_"):
+        if args.stochastic_eval:
+            cmd += ["--stochastic_eval"]
+        cmd += ["--few_shot_budgets"] + [str(b) for b in args.few_shot_budgets]
+        cmd += ["--few_shot_tasks", str(args.few_shot_tasks)]
+        cmd += ["--few_shot_epochs", str(args.few_shot_epochs)]
+        cmd += ["--few_shot_lr", str(args.few_shot_lr)]
     return cmd
 
 
 def run_job(job: dict, args, job_idx: int, n_jobs: int) -> bool:
     name = job["name"]
     cmd = _build_cmd(job, args)
+    if cmd is None:
+        _print_header(f"[{job_idx}/{n_jobs}]  {name}")
+        print("  Skipped: Test 4 is not implemented for DQN eval.")
+        return True
 
     _print_header(f"[{job_idx}/{n_jobs}]  {name}")
     print(f"  Command : {' '.join(cmd)}")
@@ -147,15 +167,26 @@ def main():
         help="Job names to skip")
     parser.add_argument("--only", nargs="*", default=None, metavar="JOB",
         help="Run only these jobs (overrides --skip)")
-    parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3],
+    parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3, 4],
         default=[1, 2, 3],
-        help="Eval stages to run: 1=length, 2=mass, 3=heatmap")
+        help="Eval stages to run: 1=length, 2=mass, 3=heatmap, 4=few-shot")
     parser.add_argument("--n_eval_episodes", type=int, default=None,
         help="Override episodes per eval point")
     parser.add_argument("--n_sweep_points", type=int, default=None,
         help="Override points per 1D sweep")
     parser.add_argument("--n_grid", type=int, default=None,
         help="Override heatmap grid size per axis")
+    parser.add_argument("--stochastic_eval", action="store_true",
+        help="Use stochastic PPO/HGFN eval instead of deterministic mean actions")
+    parser.add_argument("--few_shot_budgets", nargs="+", type=int,
+        default=[0, 1, 5, 10, 25],
+        help="Fine-tuning episode budgets for Test 4")
+    parser.add_argument("--few_shot_tasks", type=int, default=4,
+        help="Number of far-OOD corner tasks for Test 4")
+    parser.add_argument("--few_shot_epochs", type=int, default=4,
+        help="PPO epochs per few-shot adaptation batch")
+    parser.add_argument("--few_shot_lr", type=float, default=3e-5,
+        help="Learning rate for Test 4 adaptation")
     parser.add_argument("--log_dir", default="logs/eval",
         help="Directory for per-job eval logs")
     parser.add_argument("--dry-run", action="store_true",

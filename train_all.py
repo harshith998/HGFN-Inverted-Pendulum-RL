@@ -21,6 +21,8 @@ Jobs (in order)
   hgfn_directional   — HGFN directional β_fwd/β_bwd
   hgfn_gravity       — HGFN + gravity torque injection
   hgfn_perc          — HGFN + PERC critic (w_H init=1)
+  hgfn_no_physics    — matched no-physics transformer control
+  hgfn_shuffled      — shuffled inertia-bias control
 """
 
 import argparse
@@ -51,6 +53,8 @@ JOBS = [
     {"name": "hgfn_directional",    "cmd": ["python3.12", "-u", "training/train_hgfn.py", "--variant", "directional"]},
     {"name": "hgfn_gravity",        "cmd": ["python3.12", "-u", "training/train_hgfn.py", "--variant", "gravity"]},
     {"name": "hgfn_perc",           "cmd": ["python3.12", "-u", "training/train_hgfn.py", "--variant", "perc"]},
+    {"name": "hgfn_no_physics",     "cmd": ["python3.12", "-u", "training/train_hgfn.py", "--variant", "no_physics"]},
+    {"name": "hgfn_shuffled",       "cmd": ["python3.12", "-u", "training/train_hgfn.py", "--variant", "shuffled"]},
 ]
 
 STEP_RE = re.compile(r"step\s+(\d+)")

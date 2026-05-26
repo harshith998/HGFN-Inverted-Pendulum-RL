@@ -8,6 +8,8 @@ Variants
   directional — β_fwd/β_bwd  (separate scales for root→leaf / leaf→root edges)
   gravity     — scalar β·M̃  +  gravity torque injected into node embeddings
   perc        — scalar β·M̃  +  PERC critic with w_H init=1
+  no_physics  — matched graph transformer control, no M̃ bias
+  shuffled    — control with M̃ values assigned to the wrong edges
 
 Usage
 -----
@@ -20,6 +22,8 @@ from .hgfn_perhead     import HGFNPerHeadPPOPolicy
 from .hgfn_directional import HGFNDirectionalPPOPolicy
 from .hgfn_gravity     import HGFNGravityPPOPolicy
 from .hgfn_perc        import HGFNPercPPOPolicy
+from .hgfn_no_physics  import HGFNNoPhysicsPPOPolicy
+from .hgfn_shuffled    import HGFNShuffledPPOPolicy
 
 VARIANTS: dict = {
     "base":        HGFNBasePPOPolicy,
@@ -27,6 +31,8 @@ VARIANTS: dict = {
     "directional": HGFNDirectionalPPOPolicy,
     "gravity":     HGFNGravityPPOPolicy,
     "perc":        HGFNPercPPOPolicy,
+    "no_physics":  HGFNNoPhysicsPPOPolicy,
+    "shuffled":    HGFNShuffledPPOPolicy,
 }
 
 
