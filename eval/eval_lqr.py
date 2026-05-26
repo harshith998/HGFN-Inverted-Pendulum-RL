@@ -21,6 +21,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import argparse
 import numpy as np
 import scipy.linalg
 import matplotlib.pyplot as plt
@@ -209,7 +210,8 @@ def compute_eval_range(lo, hi):
 COLOR_IN  = "#5ba4cf"
 COLOR_OOD = "#1a3a5c"
 
-def plot_1d(values, rewards, train_lo, train_hi, param_name, units, plot_dir):
+def plot_1d(values, rewards, train_lo, train_hi, param_name, units, plot_dir,
+            n_episodes=N_EPISODES):
     fig, ax = plt.subplots(figsize=(11, 5))
     colors  = [COLOR_IN if train_lo <= v <= train_hi else COLOR_OOD for v in values]
     ax.plot(values, rewards, color="#aaaaaa", linewidth=0.8, zorder=1)
@@ -222,7 +224,7 @@ def plot_1d(values, rewards, train_lo, train_hi, param_name, units, plot_dir):
     ax.legend(handles=[in_p, ood_p], fontsize=10)
     ax.set_ylim(0, 2000)
     ax.set_xlabel(f"{param_name} ({units})", fontsize=12)
-    ax.set_ylabel(f"Mean Reward ({N_EPISODES} eps)", fontsize=12)
+    ax.set_ylabel(f"Mean Reward ({n_episodes} eps)", fontsize=12)
     ax.set_title(f"LQR Oracle — {param_name} Sweep", fontsize=13)
     ax.grid(alpha=0.25)
     plt.tight_layout()
@@ -264,7 +266,16 @@ def plot_2d(length_vals, mass_vals, reward_grid, len_bounds, mass_bounds,
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    with open("configs/default.yaml") as f:
+    parser = argparse.ArgumentParser(description="LQR oracle OOD evaluation.")
+    parser.add_argument("--config", default="configs/default.yaml")
+    parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3],
+        default=[1, 2, 3])
+    parser.add_argument("--n_eval_episodes", type=int, default=N_EPISODES)
+    parser.add_argument("--n_sweep_points", type=int, default=N_SWEEP_POINTS)
+    parser.add_argument("--n_grid", type=int, default=N_GRID)
+    args = parser.parse_args()
+
+    with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
     env_cfg          = cfg["environment"]
@@ -272,92 +283,103 @@ def main():
     mass_lo, mass_hi = env_cfg["link_mass_range"]
 
     os.makedirs("eval/plots", exist_ok=True)
+    os.makedirs("eval/results", exist_ok=True)
 
     all_rewards, all_wins = [], []
 
-    # ── Test 1: link_length sweep ─────────────────────────────────────────────
-    mass_mid        = (mass_lo + mass_hi) / 2.0
-    eval_len_lo, eval_len_hi = compute_eval_range(len_lo, len_hi)
-    length_vals     = np.linspace(eval_len_lo, eval_len_hi, N_SWEEP_POINTS)
-    t1_rewards      = []
+    if 1 in args.tests:
+        mass_mid = (mass_lo + mass_hi) / 2.0
+        eval_len_lo, eval_len_hi = compute_eval_range(len_lo, len_hi)
+        length_vals = np.linspace(eval_len_lo, eval_len_hi, args.n_sweep_points)
+        t1_rewards = []
 
-    print(f"\n{'='*60}")
-    print(f"[Test 1] LQR Link Length sweep")
-    print(f"  Eval  : {eval_len_lo:.3f}m → {eval_len_hi:.3f}m  ({N_SWEEP_POINTS} pts)")
-    print(f"  Train : [{len_lo:.3f}, {len_hi:.3f}]m  |  mass fixed={mass_mid:.3f}kg")
-    print(f"{'='*60}")
+        print(f"\n{'='*60}")
+        print(f"[Test 1] LQR Link Length sweep")
+        print(f"  Eval  : {eval_len_lo:.3f}m → {eval_len_hi:.3f}m  ({args.n_sweep_points} pts)")
+        print(f"  Train : [{len_lo:.3f}, {len_hi:.3f}]m  |  mass fixed={mass_mid:.3f}kg")
+        print(f"{'='*60}")
 
-    for i, length in enumerate(length_vals):
-        r, w = eval_point(cfg, length, mass_mid, N_EPISODES)
-        t1_rewards.append(r)
-        all_rewards.append(r);  all_wins.append(w)
-        tag = "IN " if len_lo <= length <= len_hi else "OOD"
-        if (i + 1) % 20 == 0 or (i + 1) == N_SWEEP_POINTS:
-            print(f"  [{i+1:3d}/{N_SWEEP_POINTS}] length={length:.4f}m  "
-                  f"reward={r:8.2f}  win={w*100:.0f}%  [{tag}]")
-
-    plot_1d(length_vals, np.array(t1_rewards), len_lo, len_hi,
-            "Link Length", "m", "eval/plots")
-
-    # ── Test 2: link_mass sweep ───────────────────────────────────────────────
-    len_mid          = (len_lo + len_hi) / 2.0
-    eval_mass_lo, eval_mass_hi = compute_eval_range(mass_lo, mass_hi)
-    mass_vals_sweep  = np.linspace(eval_mass_lo, eval_mass_hi, N_SWEEP_POINTS)
-    t2_rewards       = []
-
-    print(f"\n{'='*60}")
-    print(f"[Test 2] LQR Link Mass sweep")
-    print(f"  Eval  : {eval_mass_lo:.3f}kg → {eval_mass_hi:.3f}kg  ({N_SWEEP_POINTS} pts)")
-    print(f"  Train : [{mass_lo:.3f}, {mass_hi:.3f}]kg  |  length fixed={len_mid:.3f}m")
-    print(f"{'='*60}")
-
-    for i, mass in enumerate(mass_vals_sweep):
-        r, w = eval_point(cfg, len_mid, mass, N_EPISODES)
-        t2_rewards.append(r)
-        all_rewards.append(r);  all_wins.append(w)
-        tag = "IN " if mass_lo <= mass <= mass_hi else "OOD"
-        if (i + 1) % 20 == 0 or (i + 1) == N_SWEEP_POINTS:
-            print(f"  [{i+1:3d}/{N_SWEEP_POINTS}] mass={mass:.4f}kg  "
-                  f"reward={r:8.2f}  win={w*100:.0f}%  [{tag}]")
-
-    plot_1d(mass_vals_sweep, np.array(t2_rewards), mass_lo, mass_hi,
-            "Link Mass", "kg", "eval/plots")
-
-    # ── Test 3: 2D heatmap ────────────────────────────────────────────────────
-    eval_len_lo2,  eval_len_hi2  = compute_eval_range(len_lo,  len_hi)
-    eval_mass_lo2, eval_mass_hi2 = compute_eval_range(mass_lo, mass_hi)
-    length_grid = np.linspace(eval_len_lo2,  eval_len_hi2,  N_GRID)
-    mass_grid   = np.linspace(eval_mass_lo2, eval_mass_hi2, N_GRID)
-    reward_grid = np.zeros((N_GRID, N_GRID))
-    total_cells = N_GRID * N_GRID
-
-    print(f"\n{'='*60}")
-    print(f"[Test 3] LQR 2D Heatmap — {N_GRID}×{N_GRID} grid ({total_cells} cells)")
-    print(f"  Length : {eval_len_lo2:.3f}m → {eval_len_hi2:.3f}m")
-    print(f"  Mass   : {eval_mass_lo2:.3f}kg → {eval_mass_hi2:.3f}kg")
-    print(f"{'='*60}")
-
-    done = 0
-    for i, length in enumerate(length_grid):
-        for j, mass in enumerate(mass_grid):
-            r, w = eval_point(cfg, length, mass, N_EPISODES)
-            reward_grid[j, i] = r
+        for i, length in enumerate(length_vals):
+            r, w = eval_point(cfg, length, mass_mid, args.n_eval_episodes)
+            t1_rewards.append(r)
             all_rewards.append(r);  all_wins.append(w)
-            done += 1
-            if done % 20 == 0 or done == total_cells:
-                print(f"  [{done:4d}/{total_cells}]  "
-                      f"length={length:.3f}m  mass={mass:.3f}kg  "
-                      f"reward={r:7.2f}  win={w*100:.0f}%")
+            tag = "IN " if len_lo <= length <= len_hi else "OOD"
+            if (i + 1) % 20 == 0 or (i + 1) == args.n_sweep_points:
+                print(f"  [{i+1:3d}/{args.n_sweep_points}] length={length:.4f}m  "
+                      f"reward={r:8.2f}  win={w*100:.0f}%  [{tag}]")
 
-    overall_winrate = float(np.mean(all_wins)) * 100
+        plot_1d(length_vals, np.array(t1_rewards), len_lo, len_hi,
+                "Link Length", "m", "eval/plots", args.n_eval_episodes)
 
-    plot_2d(length_grid, mass_grid, reward_grid,
-            (len_lo, len_hi), (mass_lo, mass_hi),
-            overall_winrate, "eval/plots")
+    if 2 in args.tests:
+        len_mid = (len_lo + len_hi) / 2.0
+        eval_mass_lo, eval_mass_hi = compute_eval_range(mass_lo, mass_hi)
+        mass_vals_sweep = np.linspace(eval_mass_lo, eval_mass_hi, args.n_sweep_points)
+        t2_rewards = []
+
+        print(f"\n{'='*60}")
+        print(f"[Test 2] LQR Link Mass sweep")
+        print(f"  Eval  : {eval_mass_lo:.3f}kg → {eval_mass_hi:.3f}kg  ({args.n_sweep_points} pts)")
+        print(f"  Train : [{mass_lo:.3f}, {mass_hi:.3f}]kg  |  length fixed={len_mid:.3f}m")
+        print(f"{'='*60}")
+
+        for i, mass in enumerate(mass_vals_sweep):
+            r, w = eval_point(cfg, len_mid, mass, args.n_eval_episodes)
+            t2_rewards.append(r)
+            all_rewards.append(r);  all_wins.append(w)
+            tag = "IN " if mass_lo <= mass <= mass_hi else "OOD"
+            if (i + 1) % 20 == 0 or (i + 1) == args.n_sweep_points:
+                print(f"  [{i+1:3d}/{args.n_sweep_points}] mass={mass:.4f}kg  "
+                      f"reward={r:8.2f}  win={w*100:.0f}%  [{tag}]")
+
+        plot_1d(mass_vals_sweep, np.array(t2_rewards), mass_lo, mass_hi,
+                "Link Mass", "kg", "eval/plots", args.n_eval_episodes)
+
+    if 3 in args.tests:
+        eval_len_lo2,  eval_len_hi2  = compute_eval_range(len_lo,  len_hi)
+        eval_mass_lo2, eval_mass_hi2 = compute_eval_range(mass_lo, mass_hi)
+        length_grid = np.linspace(eval_len_lo2,  eval_len_hi2,  args.n_grid)
+        mass_grid   = np.linspace(eval_mass_lo2, eval_mass_hi2, args.n_grid)
+        reward_grid = np.zeros((args.n_grid, args.n_grid))
+        total_cells = args.n_grid * args.n_grid
+
+        print(f"\n{'='*60}")
+        print(f"[Test 3] LQR 2D Heatmap — {args.n_grid}×{args.n_grid} grid ({total_cells} cells)")
+        print(f"  Length : {eval_len_lo2:.3f}m → {eval_len_hi2:.3f}m")
+        print(f"  Mass   : {eval_mass_lo2:.3f}kg → {eval_mass_hi2:.3f}kg")
+        print(f"{'='*60}")
+
+        done = 0
+        for i, length in enumerate(length_grid):
+            for j, mass in enumerate(mass_grid):
+                r, w = eval_point(cfg, length, mass, args.n_eval_episodes)
+                reward_grid[j, i] = r
+                all_rewards.append(r);  all_wins.append(w)
+                done += 1
+                if done % 20 == 0 or done == total_cells:
+                    print(f"  [{done:4d}/{total_cells}]  "
+                          f"length={length:.3f}m  mass={mass:.3f}kg  "
+                          f"reward={r:7.2f}  win={w*100:.0f}%")
+
+        overall_winrate = float(np.mean(all_wins)) * 100
+
+        plot_2d(length_grid, mass_grid, reward_grid,
+                (len_lo, len_hi), (mass_lo, mass_hi),
+                overall_winrate, "eval/plots")
+
+        np.savez(
+            "eval/results/lqr_oracle_test3.npz",
+            lengths=length_grid, masses=mass_grid, rewards=reward_grid,
+            len_bounds=np.array([len_lo, len_hi]),
+            mass_bounds=np.array([mass_lo, mass_hi]),
+        )
+        print("  Results saved → eval/results/lqr_oracle_test3.npz")
 
     print(f"\n{'='*55}")
-    print(f"  Overall win rate : {overall_winrate:.1f}%")
-    print(f"  Mean reward      : {np.mean(all_rewards):.2f}")
+    if all_wins:
+        print(f"  Overall win rate : {float(np.mean(all_wins)) * 100:.1f}%")
+    if all_rewards:
+        print(f"  Mean reward      : {np.mean(all_rewards):.2f}")
     print(f"{'='*55}")
     print("Done.")
 
