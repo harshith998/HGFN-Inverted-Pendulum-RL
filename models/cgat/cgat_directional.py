@@ -1,5 +1,5 @@
 """
-HGFN Directional β — separate β for root→leaf and leaf→root edges.
+CGAT Directional β — separate β for root→leaf and leaf→root edges.
 
     logit_ij = Q·K/√d  +  w_e·e_ij  +  tanh(β_fwd) · M̃ᵢⱼ   (if src < dst)
     logit_ij = Q·K/√d  +  w_e·e_ij  +  tanh(β_bwd) · M̃ᵢⱼ   (if src > dst)
@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 from models.base_ppo import BasePPOPolicy
 from ._physics import compute_inertia_coupling
-from ._icga_base import ICGALayerBase, HGFNEncoderBase
+from ._icga_base import ICGALayerBase, CGATEncoderBase
 
 
 class ICGALayer(ICGALayerBase):
@@ -32,7 +32,7 @@ class ICGALayer(ICGALayerBase):
         return logits + beta_edge.unsqueeze(-1) * M_edge.unsqueeze(-1)
 
 
-class HGFNDirectionalPPOPolicy(BasePPOPolicy):
+class CGATDirectionalPPOPolicy(BasePPOPolicy):
     """Transformer + directional β: separate physics scales for fwd/bwd edges."""
 
     VARIANT = "directional"
@@ -40,7 +40,7 @@ class HGFNDirectionalPPOPolicy(BasePPOPolicy):
     def __init__(self, hidden: int = 128, n_icga_layers: int = 2,
                  n_heads: int = 2, max_links: int = 4, max_force: float = 20.0):
         super().__init__(hidden=hidden, max_force=max_force)
-        self.encoder = HGFNEncoderBase(hidden, n_icga_layers, n_heads,
+        self.encoder = CGATEncoderBase(hidden, n_icga_layers, n_heads,
                                        icga_cls=ICGALayer)
 
     def encode(self, obs: dict) -> torch.Tensor:

@@ -1,12 +1,12 @@
-"""No-physics control: same HGFN/ICGA attention stack, no M_tilde bias."""
+"""No-physics control: same CGAT/ICGA attention stack, no M_tilde bias."""
 
 from models.base_ppo import BasePPOPolicy
 from ._physics import compute_inertia_coupling
-from ._icga_base import ICGALayerBase, HGFNEncoderBase
+from ._icga_base import ICGALayerBase, CGATEncoderBase
 
 
-class HGFNNoPhysicsPPOPolicy(BasePPOPolicy):
-    """Graph transformer matched to HGFN depth/heads but with physics hook disabled."""
+class CGATNoPhysicsPPOPolicy(BasePPOPolicy):
+    """Graph transformer matched to CGAT depth/heads but with physics hook disabled."""
 
     VARIANT = "no_physics"
 
@@ -14,7 +14,7 @@ class HGFNNoPhysicsPPOPolicy(BasePPOPolicy):
                  n_heads: int = 2, max_links: int = 4,
                  max_force: float = 20.0):
         super().__init__(hidden=hidden, max_force=max_force)
-        self.encoder = HGFNEncoderBase(hidden, n_icga_layers, n_heads,
+        self.encoder = CGATEncoderBase(hidden, n_icga_layers, n_heads,
                                        icga_cls=ICGALayerBase)
 
     def encode(self, obs: dict):

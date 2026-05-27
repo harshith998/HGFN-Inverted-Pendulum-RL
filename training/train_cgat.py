@@ -1,16 +1,16 @@
-# Run: python3.12 training/train_hgfn.py
-#      python3.12 training/train_hgfn.py --config configs/default.yaml
-#      python3.12 training/train_hgfn.py --variant perhead
-#      python3.12 training/train_hgfn.py --variant gravity --config configs/default.yaml
+# Run: python3.12 training/train_cgat.py
+#      python3.12 training/train_cgat.py --config configs/default.yaml
+#      python3.12 training/train_cgat.py --variant perhead
+#      python3.12 training/train_cgat.py --variant gravity --config configs/default.yaml
 
 """
-Training script for the Hamiltonian Graph Flow Network (HGFN).
+Training script for the Coupled Graph Attention Transformer (CGAT).
 
 Drop-in replacement for train_ppo.py — identical PPO loop, same environment,
 same hyperparameter file.  Key differences:
-  • Uses an HGFN variant (base|perhead|directional|gravity|perc).
+  • Uses a CGAT variant (base|perhead|directional|gravity|perc).
   • Logs β (physics attention scale) each update.
-  • Default config overrides for HGFN (n_heads=2, n_icga_layers=2).
+  • Default config overrides for CGAT (n_heads=2, n_icga_layers=2).
 
 Variants
 --------
@@ -34,7 +34,7 @@ import yaml
 import matplotlib.pyplot as plt
 
 from env.pendulum_env import VariablePendulumEnv
-from models.hgfn import load_hgfn_variant, VARIANTS
+from models.cgat import load_cgat_variant, VARIANTS
 
 
 # ── Observation helpers (identical to train_ppo.py) ─────────────────────────
@@ -206,10 +206,10 @@ def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True)
     device  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env_cfg = cfg["environment"]
     ppo_cfg = cfg["ppo"]
-    h_cfg   = ppo_cfg.get("hgfn", {})     # HGFN-specific overrides
+    h_cfg   = ppo_cfg.get("cgat", {})     # CGAT-specific overrides
     n_envs  = ppo_cfg.get("n_envs", 4)
 
-    print(f"Device: {device}  |  Policy: HGFN-{variant}  |  Parallel envs: {n_envs}")
+    print(f"Device: {device}  |  Policy: CGAT-{variant}  |  Parallel envs: {n_envs}")
 
     def make_env():
         return VariablePendulumEnv(
@@ -233,19 +233,19 @@ def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True)
     max_force    = env_cfg["max_force"]
     max_ep_steps = env_cfg["max_episode_steps"]
 
-    # HGFN hyperparameters (fall back to ppo defaults if not overridden)
+    # CGAT hyperparameters (fall back to ppo defaults if not overridden)
     hidden       = h_cfg.get("hidden_dim",    ppo_cfg["hidden_dim"])
     n_icga       = h_cfg.get("n_icga_layers", 2)
     n_heads      = h_cfg.get("n_heads",       2)
     entropy_coef = h_cfg.get("entropy_coef",  ppo_cfg["entropy_coef"])
 
-    policy = load_hgfn_variant(
+    policy = load_cgat_variant(
         variant, hidden=hidden, n_icga_layers=n_icga,
         n_heads=n_heads, max_links=max_links, max_force=max_force,
     )
     policy.to(device)
 
-    print(f"  HGFN-{variant}: hidden={hidden}, n_icga={n_icga}, n_heads={n_heads}, "
+    print(f"  CGAT-{variant}: hidden={hidden}, n_icga={n_icga}, n_heads={n_heads}, "
           f"entropy_coef={entropy_coef}")
     total_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     print(f"  Trainable parameters: {total_params:,}")
@@ -269,7 +269,7 @@ def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True)
 
     os.makedirs("checkpoints", exist_ok=True)
     best_mean_reward = -np.inf
-    best_model_path  = f"checkpoints/hgfn_{variant}_ppo_best.pt"
+    best_model_path  = f"checkpoints/cgat_{variant}_ppo_best.pt"
 
     obs_list   = [env.reset()[0] for env in envs]
     ep_rewards = [0.0] * n_envs
@@ -278,7 +278,7 @@ def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True)
     all_ep_rewards, all_ep_lengths, all_ep_wins = [], [], []
 
     log_steps, log_mean_reward, log_mean_length, log_survival = [], [], [], []
-    log_beta = []   # HGFN-specific diagnostics
+    log_beta = []   # CGAT-specific diagnostics
 
     global_step = 0
     t_start     = time.time()
@@ -361,7 +361,7 @@ def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True)
         survival_pct = np.mean(all_ep_wins[-window:]) * 100 if all_ep_wins else 0.0
         elapsed      = time.time() - t_start
 
-        # HGFN diagnostics
+        # CGAT diagnostics
         beta_val   = _get_beta_val(policy, variant)
         beta_label = _beta_label(policy, variant)
 
@@ -397,7 +397,7 @@ def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True)
 def _plot_training(steps, rewards, lengths, survival, betas, variant: str = "base",
                    show: bool = True):
     fig, axes = plt.subplots(4, 1, figsize=(11, 11), sharex=True)
-    fig.suptitle(f"HGFN-{variant} PPO Training")
+    fig.suptitle(f"CGAT-{variant} PPO Training")
 
     axes[0].plot(steps, rewards,  color="steelblue")
     axes[0].set_ylabel("Mean Reward (last 20 eps)"); axes[0].grid(alpha=0.3)
@@ -416,7 +416,7 @@ def _plot_training(steps, rewards, lengths, survival, betas, variant: str = "bas
 
     plt.tight_layout()
     os.makedirs("checkpoints", exist_ok=True)
-    path = f"checkpoints/hgfn_{variant}_ppo_training_curve.png"
+    path = f"checkpoints/cgat_{variant}_ppo_training_curve.png"
     plt.savefig(path, dpi=150)
     print(f"  plot saved → {path}")
     if show:
@@ -429,11 +429,11 @@ def _plot_training(steps, rewards, lengths, survival, betas, variant: str = "bas
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Train an HGFN variant with PPO.")
+        description="Train a CGAT variant with PPO.")
     parser.add_argument("--config",  default="configs/default.yaml")
     parser.add_argument("--variant", default="base",
         choices=list(VARIANTS),
-        help="HGFN variant to train (default: base)")
+        help="CGAT variant to train (default: base)")
     parser.add_argument("--no-show", action="store_true",
         help="Save training plots without opening a blocking window")
     args = parser.parse_args()

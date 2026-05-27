@@ -112,7 +112,7 @@ class ICGALayerBase(nn.Module):
         return h
 
 
-class HGFNEncoderBase(nn.Module):
+class CGATEncoderBase(nn.Module):
     """
     Shared encoder: node_embed → ICGA layers → masked mean pool.
     Pass icga_cls to swap in any ICGALayerBase subclass.

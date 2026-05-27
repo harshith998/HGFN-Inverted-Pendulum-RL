@@ -1,7 +1,7 @@
-# Run (via training/train_hgfn.py): python3.12 training/train_hgfn.py --policy hgfn
+# Run (via training/train_cgat.py): python3.12 training/train_cgat.py --policy cgat
 
 """
-Hamiltonian Graph Flow Network (HGFN) — actor-critic for PPO.
+Coupled Graph Attention Transformer (CGAT) — actor-critic for PPO.
 
 Novel component (operating on the same observations as GNNTransformerPPO):
 
@@ -261,10 +261,10 @@ class ICGALayer(nn.Module):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# HGFN Encoder: node_embed → ICGA layers
+# CGAT Encoder: node_embed → ICGA layers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class HGFNEncoder(nn.Module):
+class CGATEncoder(nn.Module):
     """
     node_embed  →  ICGA layers  →  masked mean pool
 
@@ -302,12 +302,12 @@ class HGFNEncoder(nn.Module):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# HGFN PPO Policy
+# CGAT PPO Policy
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class HGFNPPOPolicy(BasePPOPolicy):
+class CGATPPOPolicy(BasePPOPolicy):
     """
-    HGFN actor-critic — transformer + analytic inertia-coupling attention bias.
+    CGAT actor-critic — transformer + analytic inertia-coupling attention bias.
 
     Identical to GNNTransformerPPOPolicy except each attention layer adds
     β · M̃ᵢⱼ to the logits, where M̃ is the normalised Lagrangian mass matrix
@@ -318,7 +318,7 @@ class HGFNPPOPolicy(BasePPOPolicy):
                  n_heads: int = 2, max_links: int = 4,
                  max_force: float = 20.0):
         super().__init__(hidden=hidden, max_force=max_force)
-        self.encoder = HGFNEncoder(hidden, n_icga_layers, n_heads)
+        self.encoder = CGATEncoder(hidden, n_icga_layers, n_heads)
 
     def encode(self, obs: dict) -> torch.Tensor:
         M_tilde = compute_inertia_coupling(obs)

@@ -1,5 +1,5 @@
 """
-HGFN Gravity — scalar β·M̃ + analytic gravity torque injected into node embeddings.
+CGAT Gravity — scalar β·M̃ + analytic gravity torque injected into node embeddings.
 
 After the initial node embedding, each node receives an additive residual
 from its current gravitational torque τ_g_i = g·Lᵢ·sin(θᵢ)·(Σₖ≥ᵢmₖ − mᵢ/2).
@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 from models.base_ppo import BasePPOPolicy
 from ._physics import NODE_FEAT_DIM, compute_inertia_coupling, compute_gravity_torques
-from ._icga_base import ICGALayerBase, HGFNEncoderBase
+from ._icga_base import ICGALayerBase, CGATEncoderBase
 
 
 class ICGALayer(ICGALayerBase):
@@ -30,7 +30,7 @@ class ICGALayer(ICGALayerBase):
         return logits + torch.tanh(self.physics_beta) * M_edge.unsqueeze(-1)
 
 
-class HGFNGravityEncoder(HGFNEncoderBase):
+class CGATGravityEncoder(CGATEncoderBase):
     """
     Adds a gravity torque residual to node embeddings before attention:
         h = node_embed(x)  +  gravity_proj(τ_g)
@@ -66,7 +66,7 @@ class HGFNGravityEncoder(HGFNEncoderBase):
         return h.sum(dim=1) / n_nodes.float()
 
 
-class HGFNGravityPPOPolicy(BasePPOPolicy):
+class CGATGravityPPOPolicy(BasePPOPolicy):
     """Transformer + scalar β·M̃ + gravity torque node injection."""
 
     VARIANT = "gravity"
@@ -74,7 +74,7 @@ class HGFNGravityPPOPolicy(BasePPOPolicy):
     def __init__(self, hidden: int = 128, n_icga_layers: int = 2,
                  n_heads: int = 2, max_links: int = 4, max_force: float = 20.0):
         super().__init__(hidden=hidden, max_force=max_force)
-        self.encoder = HGFNGravityEncoder(hidden, n_icga_layers, n_heads)
+        self.encoder = CGATGravityEncoder(hidden, n_icga_layers, n_heads)
 
     def encode(self, obs: dict) -> torch.Tensor:
         return self.encoder(obs, compute_inertia_coupling(obs))

@@ -1,12 +1,12 @@
-# Run: python3.12 eval/eval_hgfn.py
-#      python3.12 eval/eval_hgfn.py --variant perhead
-#      python3.12 eval/eval_hgfn.py --checkpoint checkpoints/hgfn_base_ppo_best.pt
-#      python3.12 eval/eval_hgfn.py --tests 1 2        # skip heatmap
-#      python3.12 eval/eval_hgfn.py --tests 3           # heatmap only
-#      python3.12 eval/eval_hgfn.py --compare           # run all variants side-by-side
+# Run: python3.12 eval/eval_cgat.py
+#      python3.12 eval/eval_cgat.py --variant perhead
+#      python3.12 eval/eval_cgat.py --checkpoint checkpoints/cgat_base_ppo_best.pt
+#      python3.12 eval/eval_cgat.py --tests 1 2        # skip heatmap
+#      python3.12 eval/eval_cgat.py --tests 3           # heatmap only
+#      python3.12 eval/eval_cgat.py --compare           # run all variants side-by-side
 
 """
-OOD evaluation suite for the Hamiltonian Graph Flow Network (HGFN).
+OOD evaluation suite for the Coupled Graph Attention Transformer (CGAT).
 
 Identical structure to eval_ppo.py — same tests and plots
 format — so results are directly comparable across all PPO baselines.
@@ -37,7 +37,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
 from env.pendulum_env import VariablePendulumEnv
-from models.hgfn import load_hgfn_variant, VARIANTS
+from models.cgat import load_cgat_variant, VARIANTS
 from eval.few_shot import (
     plot_few_shot,
     run_few_shot,
@@ -70,7 +70,7 @@ VARIANT_COLORS = {
 
 
 def _default_ckpt(variant: str) -> str:
-    return f"checkpoints/hgfn_{variant}_ppo_best.pt"
+    return f"checkpoints/cgat_{variant}_ppo_best.pt"
 
 
 # ── Model loading ─────────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ def load_policy(checkpoint_path: str, cfg: dict, device: torch.device,
                 variant: str = "base"):
     env_cfg   = cfg["environment"]
     ppo_cfg   = cfg["ppo"]
-    h_cfg     = ppo_cfg.get("hgfn", {})
+    h_cfg     = ppo_cfg.get("cgat", {})
 
     max_links = env_cfg["n_links_range"][1]
     hidden    = h_cfg.get("hidden_dim",    ppo_cfg["hidden_dim"])
@@ -87,7 +87,7 @@ def load_policy(checkpoint_path: str, cfg: dict, device: torch.device,
     n_heads   = h_cfg.get("n_heads",       2)
     max_force = env_cfg["max_force"]
 
-    policy = load_hgfn_variant(
+    policy = load_cgat_variant(
         variant, hidden=hidden, n_icga_layers=n_icga,
         n_heads=n_heads, max_links=max_links, max_force=max_force,
     )
@@ -308,12 +308,12 @@ def plot_1d(values, rewards, train_lo, train_hi,
     ax.set_xlabel(f"{param_name} ({units})", fontsize=12)
     ax.set_ylabel(f"Mean Reward ({N_EVAL_EPISODES} eps)", fontsize=12)
     ax.set_title(
-        f"OOD Generalisation — {param_name} | HGFN-{variant} PPO", fontsize=13)
+        f"OOD Generalisation — {param_name} | CGAT-{variant} PPO", fontsize=13)
     ax.grid(alpha=0.25)
 
     plt.tight_layout()
     slug = param_name.lower().replace(" ", "_")
-    path = os.path.join(plot_dir, f"hgfn_{variant}_ppo_{slug}_sweep.png")
+    path = os.path.join(plot_dir, f"cgat_{variant}_ppo_{slug}_sweep.png")
     plt.savefig(path, dpi=150)
     print(f"  Plot saved → {path}")
     plt.close()
@@ -341,14 +341,14 @@ def plot_2d(length_vals, mass_vals, reward_grid,
     ax.set_xlabel("Link Length (m)", fontsize=12)
     ax.set_ylabel("Link Mass (kg)", fontsize=12)
     ax.set_title(
-        f"OOD Heatmap — Length × Mass | HGFN-{variant} PPO\n"
+        f"OOD Heatmap — Length × Mass | CGAT-{variant} PPO\n"
         f"(white dashed box = training distribution)",
         fontsize=12,
     )
     ax.legend(fontsize=9, loc="upper right")
 
     plt.tight_layout()
-    path = os.path.join(plot_dir, f"hgfn_{variant}_ppo_ood_heatmap.png")
+    path = os.path.join(plot_dir, f"cgat_{variant}_ppo_ood_heatmap.png")
     plt.savefig(path, dpi=150)
     print(f"  Plot saved → {path}")
     plt.close()
@@ -410,7 +410,7 @@ def run_compare(cfg, device, args):
             env.close()
             l_rewards.append(r)
         ax_len.plot(length_vals, l_rewards, color=color, linewidth=1.5,
-                    label=f"HGFN-{variant}")
+                    label=f"CGAT-{variant}")
 
         # Mass sweep
         m_rewards = []
@@ -422,7 +422,7 @@ def run_compare(cfg, device, args):
             env.close()
             m_rewards.append(r)
         ax_mass.plot(mass_vals, m_rewards, color=color, linewidth=1.5,
-                     label=f"HGFN-{variant}")
+                     label=f"CGAT-{variant}")
 
         found_any = True
 
@@ -431,10 +431,10 @@ def run_compare(cfg, device, args):
         return
 
     for ax, fig, fname, title in [
-        (ax_len,  fig_len,  "eval/plots/hgfn_compare_length_sweep.png",
-         "HGFN Variant Comparison — Link Length"),
-        (ax_mass, fig_mass, "eval/plots/hgfn_compare_mass_sweep.png",
-         "HGFN Variant Comparison — Link Mass"),
+        (ax_len,  fig_len,  "eval/plots/cgat_compare_length_sweep.png",
+         "CGAT Variant Comparison — Link Length"),
+        (ax_mass, fig_mass, "eval/plots/cgat_compare_mass_sweep.png",
+         "CGAT Variant Comparison — Link Mass"),
     ]:
         ax.set_title(title, fontsize=13)
         ax.legend(fontsize=9)
@@ -448,13 +448,13 @@ def run_compare(cfg, device, args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="OOD evaluation for HGFN PPO policy variants.")
+        description="OOD evaluation for CGAT PPO policy variants.")
     parser.add_argument("--config",     default="configs/default.yaml")
     parser.add_argument("--variant",    default="base",
         choices=list(VARIANTS),
-        help="HGFN variant to evaluate (default: base)")
+        help="CGAT variant to evaluate (default: base)")
     parser.add_argument("--checkpoint", default=None,
-        help="Path to .pt file. Defaults to checkpoints/hgfn_{variant}_ppo_best.pt")
+        help="Path to .pt file. Defaults to checkpoints/cgat_{variant}_ppo_best.pt")
     parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3, 4],
         default=[1, 2, 3])
     parser.add_argument("--n_eval_episodes", type=int, default=N_EVAL_EPISODES)
@@ -495,10 +495,10 @@ def main():
     if not os.path.exists(checkpoint):
         raise FileNotFoundError(
             f"Checkpoint not found: {checkpoint}\n"
-            f"Train first:  python3.12 training/train_hgfn.py --variant {variant}")
+            f"Train first:  python3.12 training/train_cgat.py --variant {variant}")
 
     print(f"\nDevice     : {device}")
-    print(f"Policy     : HGFN-{variant}")
+    print(f"Policy     : CGAT-{variant}")
     print(f"Checkpoint : {checkpoint}")
     print(f"Config     : {args.config}")
     print(f"Tests      : {args.tests}")
@@ -550,7 +550,7 @@ def main():
         plot_2d(l_v, m_v, r_grid, l_bounds, m_bounds,
                 "eval/plots", variant=variant)
         np.savez(
-            f"eval/results/hgfn_{variant}_ppo_test3.npz",
+            f"eval/results/cgat_{variant}_ppo_test3.npz",
             lengths=l_v, masses=m_v, rewards=r_grid,
             len_bounds=np.array(l_bounds), mass_bounds=np.array(m_bounds),
         )
@@ -567,11 +567,11 @@ def main():
             stochastic_eval=args.stochastic_eval,
         )
         budgets = sorted(set([0] + args.few_shot_budgets))
-        result_path = f"eval/results/hgfn_{variant}_ppo_test4_fewshot.npz"
+        result_path = f"eval/results/cgat_{variant}_ppo_test4_fewshot.npz"
         save_few_shot_results(result_path, tasks, budgets, rewards)
         plot_few_shot(
-            f"eval/plots/hgfn_{variant}_ppo_test4_fewshot.png",
-            f"Few-Shot OOD Adaptation | HGFN-{variant} PPO",
+            f"eval/plots/cgat_{variant}_ppo_test4_fewshot.png",
+            f"Few-Shot OOD Adaptation | CGAT-{variant} PPO",
             tasks, budgets, rewards,
         )
         summary = summarize_few_shot(budgets, rewards)

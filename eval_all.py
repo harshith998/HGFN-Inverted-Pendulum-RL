@@ -6,8 +6,8 @@ Usage
 -----
   python3.12 eval_all.py
   python3.12 eval_all.py --config configs/default.yaml
-  python3.12 eval_all.py --skip dqn_mlp hgfn_perc
-  python3.12 eval_all.py --only ppo_gnn_mpnn hgfn_base
+  python3.12 eval_all.py --skip dqn_mlp cgat_perc
+  python3.12 eval_all.py --only ppo_gnn_mpnn cgat_base
   python3.12 eval_all.py --tests 1 2
 
 Jobs (in order)
@@ -17,13 +17,14 @@ Jobs (in order)
   ppo_gnn_transformer
   dqn_mlp
   dqn_gnn
-  hgfn_base
-  hgfn_perhead
-  hgfn_directional
-  hgfn_gravity
-  hgfn_perc
-  hgfn_no_physics
-  hgfn_shuffled
+  cgat_base
+  cgat_perhead
+  cgat_directional
+  cgat_gravity
+  cgat_perc
+  cgat_no_physics
+  cgat_shuffled
+  lqr_oracle
 """
 
 import argparse
@@ -40,13 +41,14 @@ JOBS = [
     {"name": "ppo_gnn_transformer", "cmd": ["python3.12", "-u", "eval/eval_ppo.py",  "--policy", "gnn_transformer"]},
     {"name": "dqn_mlp",             "cmd": ["python3.12", "-u", "eval/eval_dqn.py",  "--policy", "mlp"]},
     {"name": "dqn_gnn",             "cmd": ["python3.12", "-u", "eval/eval_dqn.py",  "--policy", "gnn"]},
-    {"name": "hgfn_base",           "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "base"]},
-    {"name": "hgfn_perhead",        "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "perhead"]},
-    {"name": "hgfn_directional",    "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "directional"]},
-    {"name": "hgfn_gravity",        "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "gravity"]},
-    {"name": "hgfn_perc",           "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "perc"]},
-    {"name": "hgfn_no_physics",     "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "no_physics"]},
-    {"name": "hgfn_shuffled",       "cmd": ["python3.12", "-u", "eval/eval_hgfn.py", "--variant", "shuffled"]},
+    {"name": "cgat_base",           "cmd": ["python3.12", "-u", "eval/eval_cgat.py", "--variant", "base"]},
+    {"name": "cgat_perhead",        "cmd": ["python3.12", "-u", "eval/eval_cgat.py", "--variant", "perhead"]},
+    {"name": "cgat_directional",    "cmd": ["python3.12", "-u", "eval/eval_cgat.py", "--variant", "directional"]},
+    {"name": "cgat_gravity",        "cmd": ["python3.12", "-u", "eval/eval_cgat.py", "--variant", "gravity"]},
+    {"name": "cgat_perc",           "cmd": ["python3.12", "-u", "eval/eval_cgat.py", "--variant", "perc"]},
+    {"name": "cgat_no_physics",     "cmd": ["python3.12", "-u", "eval/eval_cgat.py", "--variant", "no_physics"]},
+    {"name": "cgat_shuffled",       "cmd": ["python3.12", "-u", "eval/eval_cgat.py", "--variant", "shuffled"]},
+    {"name": "lqr_oracle",          "cmd": ["python3.12", "-u", "eval/eval_lqr.py"]},
 ]
 
 
@@ -98,6 +100,10 @@ def _build_cmd(job: dict, args) -> list[str] | None:
         tests = [t for t in tests if t != 4]
         if not tests:
             return None
+    if job["name"] == "lqr_oracle":
+        tests = [t for t in tests if t in (1, 2, 3)]
+        if not tests:
+            return None
     cmd += ["--tests"] + [str(t) for t in tests]
     if args.n_eval_episodes is not None:
         cmd += ["--n_eval_episodes", str(args.n_eval_episodes)]
@@ -105,7 +111,7 @@ def _build_cmd(job: dict, args) -> list[str] | None:
         cmd += ["--n_sweep_points", str(args.n_sweep_points)]
     if args.n_grid is not None:
         cmd += ["--n_grid", str(args.n_grid)]
-    if not job["name"].startswith("dqn_"):
+    if not job["name"].startswith("dqn_") and job["name"] != "lqr_oracle":
         if args.stochastic_eval:
             cmd += ["--stochastic_eval"]
         cmd += ["--few_shot_budgets"] + [str(b) for b in args.few_shot_budgets]
@@ -120,7 +126,10 @@ def run_job(job: dict, args, job_idx: int, n_jobs: int) -> bool:
     cmd = _build_cmd(job, args)
     if cmd is None:
         _print_header(f"[{job_idx}/{n_jobs}]  {name}")
-        print("  Skipped: Test 4 is not implemented for DQN eval.")
+        if name == "lqr_oracle":
+            print("  Skipped: LQR oracle only supports Tests 1-3.")
+        else:
+            print("  Skipped: Test 4 is not implemented for DQN eval.")
         return True
 
     _print_header(f"[{job_idx}/{n_jobs}]  {name}")
@@ -177,7 +186,7 @@ def main():
     parser.add_argument("--n_grid", type=int, default=None,
         help="Override heatmap grid size per axis")
     parser.add_argument("--stochastic_eval", action="store_true",
-        help="Use stochastic PPO/HGFN eval instead of deterministic mean actions")
+        help="Use stochastic PPO/CGAT eval instead of deterministic mean actions")
     parser.add_argument("--few_shot_budgets", nargs="+", type=int,
         default=[0, 1, 5, 10, 25],
         help="Fine-tuning episode budgets for Test 4")

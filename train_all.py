@@ -6,8 +6,8 @@ Usage
 -----
   python3.12 train_all.py
   python3.12 train_all.py --config configs/default.yaml
-  python3.12 train_all.py --skip dqn_mlp hgfn_perc
-  python3.12 train_all.py --only hgfn_base hgfn_gravity ppo_gnn_transformer
+  python3.12 train_all.py --skip dqn_mlp cgat_perc
+  python3.12 train_all.py --only cgat_base cgat_gravity ppo_gnn_transformer
 
 Jobs (in order)
 ---------------
@@ -16,13 +16,13 @@ Jobs (in order)
   ppo_gnn_transformer— GNN Transformer PPO
   dqn_mlp            — MLP DQN
   dqn_gnn            — GNN DQN
-  hgfn_base          — HGFN scalar β (default)
-  hgfn_perhead       — HGFN per-head β
-  hgfn_directional   — HGFN directional β_fwd/β_bwd
-  hgfn_gravity       — HGFN + gravity torque injection
-  hgfn_perc          — HGFN + PERC critic (w_H init=1)
-  hgfn_no_physics    — matched no-physics transformer control
-  hgfn_shuffled      — shuffled inertia-bias control
+  cgat_base          — CGAT scalar β (default)
+  cgat_perhead       — CGAT per-head β
+  cgat_directional   — CGAT directional β_fwd/β_bwd
+  cgat_gravity       — CGAT + gravity torque injection
+  cgat_perc          — CGAT + PERC critic (w_H init=1)
+  cgat_no_physics    — matched no-physics transformer control
+  cgat_shuffled      — shuffled inertia-bias control
 """
 
 import argparse
@@ -48,13 +48,13 @@ JOBS = [
     {"name": "ppo_gnn_transformer", "cmd": ["python3.12", "-u", "training/train_ppo.py",  "--policy", "gnn_transformer"]},
     {"name": "dqn_mlp",             "cmd": ["python3.12", "-u", "training/train_dqn.py",  "--policy", "mlp"]},
     {"name": "dqn_gnn",             "cmd": ["python3.12", "-u", "training/train_dqn.py",  "--policy", "gnn"]},
-    {"name": "hgfn_base",           "cmd": ["python3.12", "-u", "training/train_hgfn.py", "--variant", "base"]},
-    {"name": "hgfn_perhead",        "cmd": ["python3.12", "-u", "training/train_hgfn.py", "--variant", "perhead"]},
-    {"name": "hgfn_directional",    "cmd": ["python3.12", "-u", "training/train_hgfn.py", "--variant", "directional"]},
-    {"name": "hgfn_gravity",        "cmd": ["python3.12", "-u", "training/train_hgfn.py", "--variant", "gravity"]},
-    {"name": "hgfn_perc",           "cmd": ["python3.12", "-u", "training/train_hgfn.py", "--variant", "perc"]},
-    {"name": "hgfn_no_physics",     "cmd": ["python3.12", "-u", "training/train_hgfn.py", "--variant", "no_physics"]},
-    {"name": "hgfn_shuffled",       "cmd": ["python3.12", "-u", "training/train_hgfn.py", "--variant", "shuffled"]},
+    {"name": "cgat_base",           "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "base"]},
+    {"name": "cgat_perhead",        "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "perhead"]},
+    {"name": "cgat_directional",    "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "directional"]},
+    {"name": "cgat_gravity",        "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "gravity"]},
+    {"name": "cgat_perc",           "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "perc"]},
+    {"name": "cgat_no_physics",     "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "no_physics"]},
+    {"name": "cgat_shuffled",       "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "shuffled"]},
 ]
 
 STEP_RE = re.compile(r"step\s+(\d+)")
@@ -175,7 +175,7 @@ def main():
         description="Train all models sequentially with progress bars.")
     parser.add_argument("--config",  default="configs/default.yaml")
     parser.add_argument("--skip",    nargs="*", default=[],   metavar="JOB",
-        help="Job names to skip  (e.g. --skip dqn_mlp hgfn_perc)")
+        help="Job names to skip  (e.g. --skip dqn_mlp cgat_perc)")
     parser.add_argument("--only",    nargs="*", default=None, metavar="JOB",
         help="Run only these jobs (overrides --skip)")
     parser.add_argument("--log_dir", default="logs",

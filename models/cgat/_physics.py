@@ -1,5 +1,5 @@
 """
-Shared physics helpers for all HGFN variants.
+Shared physics helpers for all CGAT variants.
 All functions are pure (no learned parameters).
 """
 

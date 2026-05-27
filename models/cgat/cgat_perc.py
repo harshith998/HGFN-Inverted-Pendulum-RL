@@ -1,5 +1,5 @@
 """
-HGFN PERC — scalar β·M̃ + Potential Energy Residual Critic (w_H init=1).
+CGAT PERC — scalar β·M̃ + Potential Energy Residual Critic (w_H init=1).
 
     V(s) = value_head( critic_trunk( z_GNN ) )  +  w_H · V̂_pot(s)
 
@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 from models.base_ppo import BasePPOPolicy, LOG_STD_MIN, LOG_STD_MAX
 from ._physics import compute_inertia_coupling, compute_hamiltonian
-from ._icga_base import ICGALayerBase, HGFNEncoderBase
+from ._icga_base import ICGALayerBase, CGATEncoderBase
 
 
 class ICGALayer(ICGALayerBase):
@@ -29,7 +29,7 @@ class ICGALayer(ICGALayerBase):
         return logits + torch.tanh(self.physics_beta) * M_edge.unsqueeze(-1)
 
 
-class HGFNPercPPOPolicy(BasePPOPolicy):
+class CGATPercPPOPolicy(BasePPOPolicy):
     """
     Transformer + scalar β·M̃ + PERC critic with w_H initialised to 1.
     Critic = GNN value + w_H · V_pot  (physics warm-start, not cold-start).
@@ -40,7 +40,7 @@ class HGFNPercPPOPolicy(BasePPOPolicy):
     def __init__(self, hidden: int = 128, n_icga_layers: int = 2,
                  n_heads: int = 2, max_links: int = 4, max_force: float = 20.0):
         super().__init__(hidden=hidden, max_force=max_force)
-        self.encoder = HGFNEncoderBase(hidden, n_icga_layers, n_heads,
+        self.encoder = CGATEncoderBase(hidden, n_icga_layers, n_heads,
                                        icga_cls=ICGALayer)
         # init=1 → critic starts from physics prior, learns residual correction
         self.w_H = nn.Parameter(torch.ones(1))

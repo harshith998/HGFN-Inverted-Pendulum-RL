@@ -357,7 +357,7 @@ def main():
 
     if 4 in args.tests:
         raise NotImplementedError(
-            "Test 4 few-shot adaptation is implemented for PPO/HGFN policies. "
+            "Test 4 few-shot adaptation is implemented for PPO/CGAT policies. "
             "DQN needs a separate replay-buffer/target-network adaptation protocol.")
 
     checkpoint = args.checkpoint or f"checkpoints/{args.policy}_dqn_best.pt"
