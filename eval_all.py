@@ -177,7 +177,7 @@ def main():
     parser.add_argument("--only", nargs="*", default=None, metavar="JOB",
         help="Run only these jobs (overrides --skip)")
     parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3, 4],
-        default=[1, 2, 3],
+        default=[1, 2, 3, 4],
         help="Eval stages to run: 1=length, 2=mass, 3=heatmap, 4=few-shot")
     parser.add_argument("--n_eval_episodes", type=int, default=None,
         help="Override episodes per eval point")

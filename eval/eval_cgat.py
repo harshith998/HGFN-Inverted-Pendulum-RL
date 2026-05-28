@@ -456,7 +456,7 @@ def main():
     parser.add_argument("--checkpoint", default=None,
         help="Path to .pt file. Defaults to checkpoints/cgat_{variant}_ppo_best.pt")
     parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3, 4],
-        default=[1, 2, 3])
+        default=[1, 2, 3, 4])
     parser.add_argument("--n_eval_episodes", type=int, default=N_EVAL_EPISODES)
     parser.add_argument("--n_sweep_points",  type=int, default=N_SWEEP_POINTS)
     parser.add_argument("--n_grid",          type=int, default=N_GRID_1D)
