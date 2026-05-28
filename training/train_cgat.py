@@ -37,6 +37,19 @@ from env.pendulum_env import VariablePendulumEnv
 from models.cgat import load_cgat_variant, VARIANTS
 
 
+def set_seed(seed: int | None):
+    if seed is None:
+        return
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def seed_suffix(seed: int | None) -> str:
+    return "" if seed is None else f"_seed{seed}"
+
+
 # ── Observation helpers (identical to train_ppo.py) ─────────────────────────
 
 def batch_obs(obs_list: list) -> dict:
@@ -202,14 +215,17 @@ def _beta_label(policy, variant: str) -> str:
 
 # ── Main training loop ────────────────────────────────────────────────────────
 
-def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True):
+def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True,
+          seed: int | None = None):
+    set_seed(seed)
     device  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env_cfg = cfg["environment"]
     ppo_cfg = cfg["ppo"]
     h_cfg   = ppo_cfg.get("cgat", {})     # CGAT-specific overrides
     n_envs  = ppo_cfg.get("n_envs", 4)
 
-    print(f"Device: {device}  |  Policy: CGAT-{variant}  |  Parallel envs: {n_envs}")
+    print(f"Device: {device}  |  Policy: CGAT-{variant}  |  Parallel envs: {n_envs}"
+          f"  |  Seed: {seed if seed is not None else 'none'}")
 
     def make_env():
         return VariablePendulumEnv(
@@ -223,11 +239,12 @@ def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True)
             frame_skip       = env_cfg["frame_skip"],
             max_episode_steps= env_cfg["max_episode_steps"],
             termination_angle= env_cfg["termination_angle"],
+            max_links        = env_cfg.get("max_links"),
         )
 
     envs = [make_env() for _ in range(n_envs)]
 
-    max_links    = env_cfg["n_links_range"][1]
+    max_links    = env_cfg.get("max_links", env_cfg["n_links_range"][1])
     max_nodes    = max_links + 1
     max_edges    = max_links * 2
     max_force    = env_cfg["max_force"]
@@ -269,9 +286,12 @@ def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True)
 
     os.makedirs("checkpoints", exist_ok=True)
     best_mean_reward = -np.inf
-    best_model_path  = f"checkpoints/cgat_{variant}_ppo_best.pt"
+    best_model_path  = f"checkpoints/cgat_{variant}_ppo{seed_suffix(seed)}_best.pt"
 
-    obs_list   = [env.reset()[0] for env in envs]
+    obs_list   = [
+        env.reset(seed=None if seed is None else seed + i)[0]
+        for i, env in enumerate(envs)
+    ]
     ep_rewards = [0.0] * n_envs
     ep_lengths = [0]   * n_envs
     ep_count   = 0
@@ -387,7 +407,8 @@ def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True)
 
     if plot:
         _plot_training(log_steps, log_mean_reward, log_mean_length,
-                       log_survival, log_beta, variant, show=show_plot)
+                       log_survival, log_beta, variant, show=show_plot,
+                       seed=seed)
 
     return log_steps, log_mean_reward, log_mean_length, log_survival
 
@@ -395,7 +416,7 @@ def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True)
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
 def _plot_training(steps, rewards, lengths, survival, betas, variant: str = "base",
-                   show: bool = True):
+                   show: bool = True, seed: int | None = None):
     fig, axes = plt.subplots(4, 1, figsize=(11, 11), sharex=True)
     fig.suptitle(f"CGAT-{variant} PPO Training")
 
@@ -416,7 +437,7 @@ def _plot_training(steps, rewards, lengths, survival, betas, variant: str = "bas
 
     plt.tight_layout()
     os.makedirs("checkpoints", exist_ok=True)
-    path = f"checkpoints/cgat_{variant}_ppo_training_curve.png"
+    path = f"checkpoints/cgat_{variant}_ppo{seed_suffix(seed)}_training_curve.png"
     plt.savefig(path, dpi=150)
     print(f"  plot saved → {path}")
     if show:
@@ -436,9 +457,11 @@ if __name__ == "__main__":
         help="CGAT variant to train (default: base)")
     parser.add_argument("--no-show", action="store_true",
         help="Save training plots without opening a blocking window")
+    parser.add_argument("--seed", type=int, default=None,
+        help="Random seed. Adds _seedN to checkpoint/plot names.")
     args = parser.parse_args()
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    train(cfg, variant=args.variant, show_plot=not args.no_show)
+    train(cfg, variant=args.variant, show_plot=not args.no_show, seed=args.seed)

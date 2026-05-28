@@ -53,6 +53,7 @@ class VariablePendulumEnv(gymnasium.Env):
         min_episode_steps: int = 50,
         angle_noise: float = 0.05,
         vel_noise: float = 0.01,
+        max_links: int | None = None,
         render_mode: str | None = None,
     ):
         super().__init__()
@@ -72,7 +73,9 @@ class VariablePendulumEnv(gymnasium.Env):
         self.vel_noise = vel_noise
         self.render_mode = render_mode
 
-        self.max_links = n_links_range[1]
+        self.max_links = max_links if max_links is not None else n_links_range[1]
+        if self.max_links < n_links_range[1]:
+            raise ValueError("max_links must be >= n_links_range[1]")
         self._max_nodes = self.max_links + 1   # cart + max_links joints
         self._max_edges = 2 * self.max_links   # bidirectional
 

@@ -56,7 +56,7 @@ def load_policy(policy_name: str, checkpoint_path: str, cfg: dict,
                 device: torch.device):
     env_cfg = cfg["environment"]
     dqn_cfg = cfg["dqn"]
-    max_links = env_cfg["n_links_range"][1]
+    max_links    = env_cfg.get("max_links", env_cfg["n_links_range"][1])
     n_bins    = dqn_cfg["n_action_bins"]
     hidden    = dqn_cfg["hidden_dim"]
     n_layers  = dqn_cfg["n_mp_layers"]
@@ -86,13 +86,15 @@ def load_policy(policy_name: str, checkpoint_path: str, cfg: dict,
 # ---------------------------------------------------------------------------
 
 def make_fixed_env(cfg: dict, link_length: float, link_mass: float,
-                   cart_mass: float | None = None) -> VariablePendulumEnv:
+                   cart_mass: float | None = None,
+                   n_links: int | None = None) -> VariablePendulumEnv:
     """Build an env where every reset produces exactly the given parameters."""
     env_cfg = cfg["environment"]
     if cart_mass is None:
         lo, hi = env_cfg["cart_mass_range"]
         cart_mass = (lo + hi) / 2.0
-    n_links = env_cfg["n_links_range"][0]   # min == max for fixed-link training
+    if n_links is None:
+        n_links = env_cfg["n_links_range"][0]
     return VariablePendulumEnv(
         n_links_range       = (n_links, n_links),
         cart_mass_range     = (cart_mass, cart_mass),
@@ -104,6 +106,7 @@ def make_fixed_env(cfg: dict, link_length: float, link_mass: float,
         frame_skip          = env_cfg["frame_skip"],
         max_episode_steps   = env_cfg["max_episode_steps"],
         termination_angle   = env_cfg["termination_angle"],
+        max_links           = env_cfg.get("max_links"),
     )
 
 

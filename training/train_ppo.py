@@ -20,6 +20,19 @@ from models.gnn_transformer_ppo import GNNTransformerPPOPolicy
 from models.mlp_ppo import MLPPPOPolicy
 
 
+def set_seed(seed: int | None):
+    if seed is None:
+        return
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def seed_suffix(seed: int | None) -> str:
+    return "" if seed is None else f"_seed{seed}"
+
+
 # ---------------------------------------------------------------------------
 # Observation helpers
 # ---------------------------------------------------------------------------
@@ -183,19 +196,22 @@ def compute_ppo_loss(policy, obs, actions, old_log_probs, returns, advantages,
 # Main training loop
 # ---------------------------------------------------------------------------
 
-def train(cfg, policy_name: str, plot: bool = True, show_plot: bool = True):
+def train(cfg, policy_name: str, plot: bool = True, show_plot: bool = True,
+          seed: int | None = None):
     """
     Train a PPO policy. Returns (log_steps, log_mean_reward, log_mean_length, log_survival)
     so ablation scripts can collect and compare curves without re-running.
     Set plot=False to skip saving/showing the training curve (used by ablation_ppo.py).
     """
+    set_seed(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     env_cfg = cfg["environment"]
     ppo_cfg = cfg["ppo"]
     n_envs  = ppo_cfg.get("n_envs", 1)
 
-    print(f"Device: {device}  |  Policy: {policy_name}  |  Parallel envs: {n_envs}")
+    print(f"Device: {device}  |  Policy: {policy_name}  |  Parallel envs: {n_envs}"
+          f"  |  Seed: {seed if seed is not None else 'none'}")
 
     # Create N independent environments
     def make_env():
@@ -210,11 +226,12 @@ def train(cfg, policy_name: str, plot: bool = True, show_plot: bool = True):
             frame_skip       = env_cfg["frame_skip"],
             max_episode_steps= env_cfg["max_episode_steps"],
             termination_angle= env_cfg["termination_angle"],
+            max_links        = env_cfg.get("max_links"),
         )
 
     envs = [make_env() for _ in range(n_envs)]
 
-    max_links    = env_cfg["n_links_range"][1]
+    max_links    = env_cfg.get("max_links", env_cfg["n_links_range"][1])
     max_nodes    = max_links + 1
     max_edges    = max_links * 2
     max_force    = env_cfg["max_force"]
@@ -267,10 +284,13 @@ def train(cfg, policy_name: str, plot: bool = True, show_plot: bool = True):
 
     os.makedirs("checkpoints", exist_ok=True)
     best_mean_reward = -np.inf
-    best_model_path  = f"checkpoints/{policy_name}_ppo_best.pt"
+    best_model_path  = f"checkpoints/{policy_name}_ppo{seed_suffix(seed)}_best.pt"
 
     # Initialise all envs
-    obs_list   = [env.reset()[0] for env in envs]
+    obs_list   = [
+        env.reset(seed=None if seed is None else seed + i)[0]
+        for i, env in enumerate(envs)
+    ]
     ep_rewards = [0.0] * n_envs
     ep_lengths = [0]   * n_envs
     ep_count   = 0
@@ -392,7 +412,7 @@ def train(cfg, policy_name: str, plot: bool = True, show_plot: bool = True):
     if plot:
         _plot_training(
             log_steps, log_mean_reward, log_mean_length, log_survival,
-            policy_name, show=show_plot,
+            policy_name, show=show_plot, seed=seed,
         )
     return log_steps, log_mean_reward, log_mean_length, log_survival
 
@@ -401,7 +421,8 @@ def train(cfg, policy_name: str, plot: bool = True, show_plot: bool = True):
 # Plot
 # ---------------------------------------------------------------------------
 
-def _plot_training(steps, rewards, lengths, survival, policy_name, show: bool = True):
+def _plot_training(steps, rewards, lengths, survival, policy_name,
+                   show: bool = True, seed: int | None = None):
     fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
     fig.suptitle(f"PPO Training — {policy_name.upper()} policy")
 
@@ -421,7 +442,7 @@ def _plot_training(steps, rewards, lengths, survival, policy_name, show: bool = 
 
     plt.tight_layout()
     os.makedirs("checkpoints", exist_ok=True)
-    path = f"checkpoints/{policy_name}_ppo_training_curve.png"
+    path = f"checkpoints/{policy_name}_ppo{seed_suffix(seed)}_training_curve.png"
     plt.savefig(path, dpi=150)
     print(f"  plot saved → {path}")
     if show:
@@ -442,9 +463,11 @@ if __name__ == "__main__":
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--no-show", action="store_true",
                         help="Save training plots without opening a blocking window")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Random seed. Adds _seedN to checkpoint/plot names.")
     args = parser.parse_args()
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    train(cfg, args.policy, show_plot=not args.no_show)
+    train(cfg, args.policy, show_plot=not args.no_show, seed=args.seed)

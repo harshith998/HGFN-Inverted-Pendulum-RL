@@ -45,6 +45,13 @@ from eval.few_shot import (
     select_eval_action,
     summarize_few_shot,
 )
+from eval.topology import (
+    plot_topology_heatmaps,
+    plot_topology_sweep,
+    seed_suffix,
+    topology_tag,
+    topology_values,
+)
 
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
@@ -73,6 +80,19 @@ def _default_ckpt(variant: str) -> str:
     return f"checkpoints/cgat_{variant}_ppo_best.pt"
 
 
+def _seeded_ckpt(variant: str, seed: int | None) -> str:
+    return f"checkpoints/cgat_{variant}_ppo{seed_suffix(seed)}_best.pt"
+
+
+def set_seed(seed: int | None):
+    if seed is None:
+        return
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 # ── Model loading ─────────────────────────────────────────────────────────────
 
 def load_policy(checkpoint_path: str, cfg: dict, device: torch.device,
@@ -81,7 +101,7 @@ def load_policy(checkpoint_path: str, cfg: dict, device: torch.device,
     ppo_cfg   = cfg["ppo"]
     h_cfg     = ppo_cfg.get("cgat", {})
 
-    max_links = env_cfg["n_links_range"][1]
+    max_links    = env_cfg.get("max_links", env_cfg["n_links_range"][1])
     hidden    = h_cfg.get("hidden_dim",    ppo_cfg["hidden_dim"])
     n_icga    = h_cfg.get("n_icga_layers", 2)
     n_heads   = h_cfg.get("n_heads",       2)
@@ -125,12 +145,14 @@ def _beta_summary(policy, variant: str) -> str:
 # ── Environment factory ───────────────────────────────────────────────────────
 
 def make_fixed_env(cfg: dict, link_length: float, link_mass: float,
-                   cart_mass: float | None = None) -> VariablePendulumEnv:
+                   cart_mass: float | None = None,
+                   n_links: int | None = None) -> VariablePendulumEnv:
     env_cfg = cfg["environment"]
     if cart_mass is None:
         lo, hi = env_cfg["cart_mass_range"]
         cart_mass = (lo + hi) / 2.0
-    n_links = env_cfg["n_links_range"][0]
+    if n_links is None:
+        n_links = env_cfg["n_links_range"][0]
     return VariablePendulumEnv(
         n_links_range     = (n_links, n_links),
         cart_mass_range   = (cart_mass, cart_mass),
@@ -142,6 +164,7 @@ def make_fixed_env(cfg: dict, link_length: float, link_mass: float,
         frame_skip        = env_cfg["frame_skip"],
         max_episode_steps = env_cfg["max_episode_steps"],
         termination_angle = env_cfg["termination_angle"],
+        max_links         = env_cfg.get("max_links"),
     )
 
 

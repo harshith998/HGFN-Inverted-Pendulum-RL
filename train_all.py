@@ -6,6 +6,7 @@ Usage
 -----
   python3.12 train_all.py
   python3.12 train_all.py --config configs/default.yaml
+  python3.12 train_all.py --seeds 0 1 2
   python3.12 train_all.py --skip dqn_mlp cgat_perc
   python3.12 train_all.py --only cgat_base cgat_gravity ppo_gnn_transformer
 
@@ -100,17 +101,17 @@ def _close_bar(bar):
 
 # ── Run one job ────────────────────────────────────────────────────────────────
 
-def run_job(job: dict, config_path: str, cfg: dict,
+def run_job(job: dict, config_path: str, cfg: dict, seed: int,
             job_idx: int, n_jobs: int, log_dir: str) -> bool:
     name = job["name"]
     total_steps = total_steps_for_job(cfg, name)
-    cmd  = job["cmd"] + ["--config", config_path, "--no-show"]
+    cmd  = job["cmd"] + ["--config", config_path, "--no-show", "--seed", str(seed)]
 
-    _print_header(f"[{job_idx}/{n_jobs}]  {name}")
+    _print_header(f"[{job_idx}/{n_jobs}]  {name}  seed={seed}")
     print(f"  Command : {' '.join(cmd)}")
     print(f"  Steps   : {total_steps:,}")
 
-    log_path = os.path.join(log_dir, f"{name}.log")
+    log_path = os.path.join(log_dir, f"{name}_seed{seed}.log")
     print(f"  Log     : {log_path}\n")
 
     bar     = _make_bar(total_steps, f"  {name}", position=0)
@@ -180,6 +181,8 @@ def main():
         help="Run only these jobs (overrides --skip)")
     parser.add_argument("--log_dir", default="logs",
         help="Directory for per-job log files (default: logs/)")
+    parser.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2],
+        help="Seeds to train. Default: 0 1 2")
     args = parser.parse_args()
 
     if not os.path.exists(args.config):
@@ -203,29 +206,31 @@ def main():
     if not jobs:
         sys.exit("No jobs to run after filtering.")
 
-    step_counts = [total_steps_for_job(cfg, j["name"]) for j in jobs]
+    expanded_jobs = [(job, seed) for seed in args.seeds for job in jobs]
+    step_counts = [total_steps_for_job(cfg, j["name"]) for j, _ in expanded_jobs]
     unique_step_counts = sorted(set(step_counts))
     step_summary = (
         f"{unique_step_counts[0]:,} steps each"
         if len(unique_step_counts) == 1
         else "mixed step counts"
     )
-    print(f"\ntrain_all  |  {len(jobs)}/{len(JOBS)} jobs  |  {step_summary}")
+    print(f"\ntrain_all  |  {len(expanded_jobs)}/{len(JOBS) * len(args.seeds)} runs  |  {step_summary}")
     print(f"Config     : {args.config}")
+    print(f"Seeds      : {args.seeds}")
     print(f"Logs       : {args.log_dir}/")
     if not HAS_TQDM:
         print("[warn] tqdm not installed — run:  pip install tqdm")
     print(f"\nJobs to run:")
-    for j in jobs:
-        print(f"  • {j['name']}")
+    for j, seed in expanded_jobs:
+        print(f"  • {j['name']}  seed={seed}")
 
-    overall_bar = _make_bar(len(jobs), "Overall  ", position=1)
+    overall_bar = _make_bar(len(expanded_jobs), "Overall  ", position=1)
     results     = {}
     t_all       = time.time()
 
-    for i, job in enumerate(jobs, 1):
-        ok = run_job(job, args.config, cfg, i, len(jobs), args.log_dir)
-        results[job["name"]] = ok
+    for i, (job, seed) in enumerate(expanded_jobs, 1):
+        ok = run_job(job, args.config, cfg, seed, i, len(expanded_jobs), args.log_dir)
+        results[f"{job['name']}_seed{seed}"] = ok
         if overall_bar is not None:
             overall_bar.update(1)
 

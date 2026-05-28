@@ -41,6 +41,13 @@ from eval.few_shot import (
     select_eval_action,
     summarize_few_shot,
 )
+from eval.topology import (
+    plot_topology_heatmaps,
+    plot_topology_sweep,
+    seed_suffix,
+    topology_tag,
+    topology_values,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -60,11 +67,21 @@ COLOR_OOD     = "#1a3a5c"
 # Model loading
 # ---------------------------------------------------------------------------
 
+def set_seed(seed: int | None):
+    if seed is None:
+        return
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+
 def load_policy(policy_name: str, checkpoint_path: str, cfg: dict,
                 device: torch.device):
     env_cfg  = cfg["environment"]
     ppo_cfg  = cfg["ppo"]
-    max_links = env_cfg["n_links_range"][1]
+    max_links    = env_cfg.get("max_links", env_cfg["n_links_range"][1])
     hidden    = ppo_cfg["hidden_dim"]
     n_layers  = ppo_cfg["n_layers"]
     n_heads   = ppo_cfg["n_heads"]
@@ -107,12 +124,14 @@ def load_policy(policy_name: str, checkpoint_path: str, cfg: dict,
 # ---------------------------------------------------------------------------
 
 def make_fixed_env(cfg: dict, link_length: float, link_mass: float,
-                   cart_mass: float | None = None) -> VariablePendulumEnv:
+                   cart_mass: float | None = None,
+                   n_links: int | None = None) -> VariablePendulumEnv:
     env_cfg = cfg["environment"]
     if cart_mass is None:
         lo, hi = env_cfg["cart_mass_range"]
         cart_mass = (lo + hi) / 2.0
-    n_links = env_cfg["n_links_range"][0]
+    if n_links is None:
+        n_links = env_cfg["n_links_range"][0]
     return VariablePendulumEnv(
         n_links_range     = (n_links, n_links),
         cart_mass_range   = (cart_mass, cart_mass),
@@ -124,6 +143,7 @@ def make_fixed_env(cfg: dict, link_length: float, link_mass: float,
         frame_skip        = env_cfg["frame_skip"],
         max_episode_steps = env_cfg["max_episode_steps"],
         termination_angle = env_cfg["termination_angle"],
+        max_links         = env_cfg.get("max_links"),
     )
 
 
@@ -230,43 +250,79 @@ def run_test2(policy, cfg, device, n_episodes, n_points, stochastic_eval=False):
 
 
 # ---------------------------------------------------------------------------
-# Test 3 — 2D heatmap (link_length × link_mass)
+# Test 2.5 — topology sweep
+# ---------------------------------------------------------------------------
+
+def run_test25(policy, cfg, device, n_episodes, stochastic_eval=False):
+    env_cfg = cfg["environment"]
+    len_mid = sum(env_cfg["link_length_range"]) / 2.0
+    mass_mid = sum(env_cfg["link_mass_range"]) / 2.0
+    train_topology = tuple(env_cfg["n_links_range"])
+    n_links_vals = topology_values(cfg)
+    rewards = []
+
+    print(f"\n{'='*60}")
+    print("[Test 2.5] Topology sweep")
+    print(f"  n_links : {n_links_vals}")
+    print(f"  Train topology : {train_topology}")
+    print(f"  Length={len_mid:.3f}m  Mass={mass_mid:.3f}kg  |  {n_episodes} eps/pt")
+    print(f"{'='*60}")
+
+    for i, n_links in enumerate(n_links_vals):
+        env = make_fixed_env(
+            cfg, link_length=len_mid, link_mass=mass_mid, n_links=n_links)
+        r = eval_point(policy, env, n_episodes, device,
+                       stochastic_eval=stochastic_eval)
+        env.close()
+        rewards.append(r)
+        print(f"  [{i+1:3d}/{len(n_links_vals)}] n_links={n_links}  "
+              f"reward={r:8.2f}  [{topology_tag(n_links, train_topology)}]")
+
+    return np.array(n_links_vals), np.array(rewards), train_topology
+
+
+# ---------------------------------------------------------------------------
+# Test 3 — topology-aware heatmaps (link_length × link_mass per n_links)
 # ---------------------------------------------------------------------------
 
 def run_test3(policy, cfg, device, n_episodes, n_grid, stochastic_eval=False):
     env_cfg = cfg["environment"]
     len_lo, len_hi   = env_cfg["link_length_range"]
     mass_lo, mass_hi = env_cfg["link_mass_range"]
+    n_links_vals = topology_values(cfg)
 
     len_eval_lo,  len_eval_hi  = compute_eval_range(len_lo,  len_hi)
     mass_eval_lo, mass_eval_hi = compute_eval_range(mass_lo, mass_hi)
 
     length_vals = np.linspace(len_eval_lo,  len_eval_hi,  n_grid)
     mass_vals   = np.linspace(mass_eval_lo, mass_eval_hi, n_grid)
-    reward_grid = np.full((n_grid, n_grid), np.nan)
+    reward_cube = np.full((len(n_links_vals), n_grid, n_grid), np.nan)
 
-    total = n_grid * n_grid
+    total = len(n_links_vals) * n_grid * n_grid
     print(f"\n{'='*60}")
-    print(f"[Test 3] 2D Heatmap — {n_grid}×{n_grid} grid ({total} cells)")
+    print(f"[Test 3] Topology heatmaps — {len(n_links_vals)}×{n_grid}×{n_grid} grid ({total} cells)")
+    print(f"  n_links: {n_links_vals}")
     print(f"  Length : {len_eval_lo:.3f}m → {len_eval_hi:.3f}m")
     print(f"  Mass   : {mass_eval_lo:.3f}kg → {mass_eval_hi:.3f}kg")
     print(f"{'='*60}")
 
     done = 0
-    for i, length in enumerate(length_vals):
-        for j, mass in enumerate(mass_vals):
-            env = make_fixed_env(cfg, link_length=length, link_mass=mass)
-            r = eval_point(policy, env, n_episodes, device,
-                           stochastic_eval=stochastic_eval)
-            env.close()
-            reward_grid[j, i] = r
-            done += 1
-            if done % 10 == 0 or done == total:
-                print(f"  [{done:4d}/{total}] "
-                      f"length={length:.3f}m  mass={mass:.3f}kg  reward={r:.2f}")
+    for k, n_links in enumerate(n_links_vals):
+        for i, length in enumerate(length_vals):
+            for j, mass in enumerate(mass_vals):
+                env = make_fixed_env(
+                    cfg, link_length=length, link_mass=mass, n_links=n_links)
+                r = eval_point(policy, env, n_episodes, device,
+                               stochastic_eval=stochastic_eval)
+                env.close()
+                reward_cube[k, j, i] = r
+                done += 1
+                if done % 10 == 0 or done == total:
+                    print(f"  [{done:4d}/{total}] n_links={n_links} "
+                          f"length={length:.3f}m  mass={mass:.3f}kg  reward={r:.2f}")
 
-    return (length_vals, mass_vals, reward_grid,
-            (len_lo, len_hi), (mass_lo, mass_hi))
+    return (length_vals, mass_vals, reward_cube, np.array(n_links_vals),
+            (len_lo, len_hi), (mass_lo, mass_hi), tuple(env_cfg["n_links_range"]))
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +330,7 @@ def run_test3(policy, cfg, device, n_episodes, n_grid, stochastic_eval=False):
 # ---------------------------------------------------------------------------
 
 def plot_1d(values, rewards, train_lo, train_hi,
-            param_name, units, policy_name, plot_dir):
+            param_name, units, policy_name, plot_dir, file_suffix: str = ""):
     fig, ax = plt.subplots(figsize=(11, 5))
 
     colors = [COLOR_IN_DIST if train_lo <= v <= train_hi else COLOR_OOD
@@ -307,7 +363,7 @@ def plot_1d(values, rewards, train_lo, train_hi,
 
     plt.tight_layout()
     slug = param_name.lower().replace(" ", "_")
-    path = os.path.join(plot_dir, f"{policy_name}_ppo_{slug}_sweep.png")
+    path = os.path.join(plot_dir, f"{policy_name}_ppo{file_suffix}_{slug}_sweep.png")
     plt.savefig(path, dpi=150)
     print(f"  Plot saved → {path}")
     plt.close()
@@ -361,8 +417,9 @@ def main():
     parser.add_argument("--config",     default="configs/default.yaml")
     parser.add_argument("--checkpoint", default=None,
         help="Path to .pt checkpoint. Defaults to checkpoints/{policy}_ppo_best.pt")
-    parser.add_argument("--tests", nargs="+", type=int, choices=[1, 2, 3, 4],
-        default=[1, 2, 3, 4])
+    parser.add_argument("--tests", nargs="+",
+        choices=["1", "2", "2.5", "3", "4"],
+        default=["1", "2", "2.5", "3", "4"])
     parser.add_argument("--n_eval_episodes", type=int, default=N_EVAL_EPISODES)
     parser.add_argument("--n_sweep_points",  type=int, default=N_SWEEP_POINTS)
     parser.add_argument("--n_grid",          type=int, default=N_GRID_1D)
@@ -377,15 +434,18 @@ def main():
         help="PPO epochs per few-shot adaptation batch")
     parser.add_argument("--few_shot_lr", type=float, default=3e-5,
         help="Learning rate for Test 4 adaptation")
+    parser.add_argument("--seed", type=int, default=None,
+        help="Eval seed and checkpoint suffix. Uses checkpoints/{policy}_ppo_seedN_best.pt.")
     args = parser.parse_args()
+    set_seed(args.seed)
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    if args.policy == "random" and 4 in args.tests:
+    if args.policy == "random" and "4" in args.tests:
         raise NotImplementedError("Test 4 fine-tuning is not defined for random policy.")
 
-    checkpoint = args.checkpoint or f"checkpoints/{args.policy}_ppo_best.pt"
+    checkpoint = args.checkpoint or f"checkpoints/{args.policy}_ppo{seed_suffix(args.seed)}_best.pt"
     if args.policy != "random" and not os.path.exists(checkpoint):
         raise FileNotFoundError(
             f"Checkpoint not found: {checkpoint}\n"
@@ -397,6 +457,7 @@ def main():
     print(f"Checkpoint : {checkpoint}")
     print(f"Config     : {args.config}")
     print(f"Tests      : {args.tests}")
+    print(f"Seed       : {args.seed if args.seed is not None else 'none'}")
     print(f"Episodes/pt: {args.n_eval_episodes}")
     print(f"Eval mode  : {'stochastic' if args.stochastic_eval else 'deterministic'}")
 
@@ -425,33 +486,64 @@ def main():
     os.makedirs("eval/plots", exist_ok=True)
     os.makedirs("eval/results", exist_ok=True)
 
-    if 1 in args.tests:
+    suffix = seed_suffix(args.seed)
+
+    if "1" in args.tests:
         l_vals, l_rewards, l_lo, l_hi = run_test1(
             policy, cfg, device, args.n_eval_episodes, args.n_sweep_points,
             stochastic_eval=args.stochastic_eval)
         plot_1d(l_vals, l_rewards, l_lo, l_hi,
-                "Link Length", "m", args.policy, "eval/plots")
+                "Link Length", "m", args.policy, "eval/plots", suffix)
+        np.savez(
+            f"eval/results/{args.policy}_ppo{suffix}_test1_length.npz",
+            values=l_vals, rewards=l_rewards,
+            bounds=np.array([l_lo, l_hi]),
+        )
 
-    if 2 in args.tests:
+    if "2" in args.tests:
         m_vals, m_rewards, m_lo, m_hi = run_test2(
             policy, cfg, device, args.n_eval_episodes, args.n_sweep_points,
             stochastic_eval=args.stochastic_eval)
         plot_1d(m_vals, m_rewards, m_lo, m_hi,
-                "Link Mass", "kg", args.policy, "eval/plots")
-
-    if 3 in args.tests:
-        l_v, m_v, r_grid, l_bounds, m_bounds = run_test3(
-            policy, cfg, device, args.n_eval_episodes, args.n_grid,
-            stochastic_eval=args.stochastic_eval)
-        plot_2d(l_v, m_v, r_grid, l_bounds, m_bounds,
-                args.policy, "eval/plots")
+                "Link Mass", "kg", args.policy, "eval/plots", suffix)
         np.savez(
-            f"eval/results/{args.policy}_ppo_test3.npz",
-            lengths=l_v, masses=m_v, rewards=r_grid,
-            len_bounds=np.array(l_bounds), mass_bounds=np.array(m_bounds),
+            f"eval/results/{args.policy}_ppo{suffix}_test2_mass.npz",
+            values=m_vals, rewards=m_rewards,
+            bounds=np.array([m_lo, m_hi]),
         )
 
-    if 4 in args.tests:
+    if "2.5" in args.tests:
+        n_vals, topo_rewards, topo_bounds = run_test25(
+            policy, cfg, device, args.n_eval_episodes,
+            stochastic_eval=args.stochastic_eval)
+        plot_topology_sweep(
+            n_vals, topo_rewards, topo_bounds,
+            f"Topology Sweep | {args.policy.upper()} PPO",
+            f"eval/plots/{args.policy}_ppo{suffix}_topology_sweep.png",
+        )
+        np.savez(
+            f"eval/results/{args.policy}_ppo{suffix}_test25_topology.npz",
+            n_links=n_vals, rewards=topo_rewards,
+            train_topology=np.array(topo_bounds),
+        )
+
+    if "3" in args.tests:
+        l_v, m_v, r_cube, n_vals, l_bounds, m_bounds, topo_bounds = run_test3(
+            policy, cfg, device, args.n_eval_episodes, args.n_grid,
+            stochastic_eval=args.stochastic_eval)
+        plot_topology_heatmaps(
+            l_v, m_v, r_cube, n_vals, l_bounds, m_bounds, topo_bounds,
+            f"OOD Heatmaps | {args.policy.upper()} PPO",
+            f"eval/plots/{args.policy}_ppo{suffix}_ood_heatmaps_by_topology.png",
+        )
+        np.savez(
+            f"eval/results/{args.policy}_ppo{suffix}_test3.npz",
+            lengths=l_v, masses=m_v, n_links=n_vals, rewards=r_cube,
+            len_bounds=np.array(l_bounds), mass_bounds=np.array(m_bounds),
+            train_topology=np.array(topo_bounds),
+        )
+
+    if "4" in args.tests:
         tasks, rewards = run_few_shot(
             policy, make_fixed_env, cfg, device,
             budgets=args.few_shot_budgets,
@@ -463,10 +555,10 @@ def main():
             stochastic_eval=args.stochastic_eval,
         )
         budgets = sorted(set([0] + args.few_shot_budgets))
-        result_path = f"eval/results/{args.policy}_ppo_test4_fewshot.npz"
+        result_path = f"eval/results/{args.policy}_ppo{suffix}_test4_fewshot.npz"
         save_few_shot_results(result_path, tasks, budgets, rewards)
         plot_few_shot(
-            f"eval/plots/{args.policy}_ppo_test4_fewshot.png",
+            f"eval/plots/{args.policy}_ppo{suffix}_test4_fewshot.png",
             f"Few-Shot OOD Adaptation | {args.policy.upper()} PPO",
             tasks, budgets, rewards,
         )
